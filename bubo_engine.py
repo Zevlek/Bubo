@@ -134,6 +134,13 @@ class EngineConfig:
     backtest_period_years: int = 2
     watch_interval_min: int = 15
     use_finbert: bool = True
+    paper_broker: str = "local"  # local | ibkr
+    ibkr_host: str = "127.0.0.1"
+    ibkr_port: int = 7497
+    ibkr_client_id: int = 42
+    ibkr_account: str = ""
+    ibkr_exchange: str = "SMART"
+    ibkr_currency: str = "USD"
 
 
 def get_adaptive_weights(cfg: EngineConfig) -> dict:
@@ -1420,6 +1427,109 @@ def _latest_price(engine: ScoringEngine, ticker: str, cache: dict) -> float | No
     return px
 
 
+def _normalize_paper_broker(value: str) -> str:
+    broker = str(value or "local").strip().lower()
+    return broker if broker in {"local", "ibkr"} else "local"
+
+
+class IBKRPaperAdapter:
+    """
+    Minimal IBKR paper adapter via ib_insync.
+    Keeps BUBO paper-state semantics while sending simulated orders to IBKR.
+    """
+
+    def __init__(self, cfg: EngineConfig):
+        self.cfg = cfg
+        self._ib = None
+
+    def connect(self):
+        try:
+            from ib_insync import IB  # type: ignore
+        except Exception as e:
+            raise RuntimeError("ib_insync is required for --paper-broker ibkr") from e
+
+        self._ib = IB()
+        self._ib.connect(
+            host=self.cfg.ibkr_host,
+            port=int(self.cfg.ibkr_port),
+            clientId=int(self.cfg.ibkr_client_id),
+            timeout=8,
+            readonly=False,
+            account=str(self.cfg.ibkr_account or "") or None,
+        )
+        if not self._ib.isConnected():
+            raise RuntimeError("IBKR connection failed")
+        return self._ib
+
+    def disconnect(self):
+        if self._ib is not None:
+            try:
+                self._ib.disconnect()
+            except Exception:
+                pass
+            self._ib = None
+
+    def place_market_order(self, ticker: str, side: str, quantity: int) -> dict:
+        if quantity <= 0:
+            return {"ok": False, "reason": "invalid quantity"}
+
+        try:
+            from ib_insync import Stock, MarketOrder  # type: ignore
+        except Exception as e:
+            return {"ok": False, "reason": f"ib_insync missing: {e}"}
+
+        ib = self._ib
+        if ib is None or not ib.isConnected():
+            return {"ok": False, "reason": "not connected"}
+
+        try:
+            contract = Stock(
+                symbol=ticker,
+                exchange=self.cfg.ibkr_exchange,
+                currency=self.cfg.ibkr_currency,
+            )
+            ib.qualifyContracts(contract)
+            order = MarketOrder("BUY" if side.upper() == "BUY" else "SELL", int(quantity))
+            if self.cfg.ibkr_account:
+                order.account = self.cfg.ibkr_account
+            trade = ib.placeOrder(contract, order)
+            # Wait a bit for fill updates in paper account.
+            for _ in range(20):
+                ib.sleep(0.25)
+                if trade.isDone():
+                    break
+
+            filled = int(getattr(trade.orderStatus, "filled", 0) or 0)
+            avg_fill = float(getattr(trade.orderStatus, "avgFillPrice", 0.0) or 0.0)
+            status = str(getattr(trade.orderStatus, "status", "") or "")
+
+            commission = 0.0
+            for fill in getattr(trade, "fills", []) or []:
+                rep = getattr(fill, "commissionReport", None)
+                if rep is not None:
+                    try:
+                        commission += float(getattr(rep, "commission", 0.0) or 0.0)
+                    except Exception:
+                        pass
+
+            if filled <= 0 or avg_fill <= 0:
+                return {
+                    "ok": False,
+                    "reason": f"not filled (status={status})",
+                    "status": status,
+                }
+
+            return {
+                "ok": True,
+                "status": status or "Filled",
+                "filled": filled,
+                "avg_fill_price": avg_fill,
+                "commission": float(max(0.0, commission)),
+            }
+        except Exception as e:
+            return {"ok": False, "reason": str(e)}
+
+
 def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> dict:
     """
     Execute one paper-trading cycle from current signals.
@@ -1427,13 +1537,25 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     """
     cfg = engine.cfg
     state = load_paper_state(state_path, cfg)
+    broker = _normalize_paper_broker(getattr(cfg, "paper_broker", "local"))
+    state["paper_broker"] = broker
 
     fee_rate = cfg.trade_fee_bps / 10_000
     slippage_rate = cfg.slippage_bps / 10_000
 
     positions = state["positions"]
     actions = []
+    warnings_list = []
     price_cache = {}
+    ibkr = None
+    if broker == "ibkr":
+        ibkr = IBKRPaperAdapter(cfg)
+        try:
+            ibkr.connect()
+        except Exception as e:
+            warnings_list.append(f"IBKR unavailable, fallback local: {e}")
+            broker = "local"
+            state["paper_broker"] = "local"
 
     # Build superset for pricing: active signals + currently held positions.
     signal_tickers = set(results.keys()) if results else set()
@@ -1459,12 +1581,28 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
         if exit_reason:
             exec_px = px * (1 - slippage_rate)
-            gross = pos["shares"] * exec_px
-            exit_fee = gross * fee_rate
+            exit_fee = 0.0
+            sold_shares = int(pos["shares"])
+            if broker == "ibkr" and ibkr is not None:
+                order_res = ibkr.place_market_order(ticker, "SELL", int(pos["shares"]))
+                if not order_res.get("ok"):
+                    warnings_list.append(
+                        f"IBKR SELL {ticker} skipped: {order_res.get('reason', 'unknown')}"
+                    )
+                    continue
+                sold_shares = int(order_res.get("filled", pos["shares"]))
+                exec_px = float(order_res.get("avg_fill_price", exec_px) or exec_px)
+                exit_fee = float(order_res.get("commission", 0.0) or 0.0)
+            else:
+                gross_for_fee = pos["shares"] * exec_px
+                exit_fee = gross_for_fee * fee_rate
+
+            gross = sold_shares * exec_px
             net_credit = gross - exit_fee
             state["cash"] += net_credit
 
-            entry_cost = pos["shares"] * pos["entry_price"] + pos.get("entry_fee", 0.0)
+            entry_shares = int(pos.get("shares", sold_shares))
+            entry_cost = entry_shares * pos["entry_price"] + pos.get("entry_fee", 0.0)
             pnl = net_credit - entry_cost
             state["realized_pnl"] += pnl
 
@@ -1481,7 +1619,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     "exit_date": date.today().isoformat(),
                     "entry_price": round(pos["entry_price"], 4),
                     "exit_price": round(exec_px, 4),
-                    "shares": int(pos["shares"]),
+                    "shares": int(sold_shares),
                     "entry_fee": round(pos.get("entry_fee", 0.0), 4),
                     "exit_fee": round(exit_fee, 4),
                     "pnl": round(pnl, 4),
@@ -1490,7 +1628,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 }
             )
 
-            actions.append(f"SELL {ticker} x{int(pos['shares'])} ({exit_reason})")
+            actions.append(f"SELL {ticker} x{int(sold_shares)} ({exit_reason})")
             del positions[ticker]
 
     def positions_market_value() -> float:
@@ -1550,6 +1688,22 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         if shares <= 0 or total_debit > state["cash"]:
             continue
 
+        if broker == "ibkr" and ibkr is not None:
+            order_res = ibkr.place_market_order(ticker, "BUY", int(shares))
+            if not order_res.get("ok"):
+                warnings_list.append(
+                    f"IBKR BUY {ticker} skipped: {order_res.get('reason', 'unknown')}"
+                )
+                continue
+            shares = int(order_res.get("filled", shares))
+            exec_px = float(order_res.get("avg_fill_price", exec_px) or exec_px)
+            gross = shares * exec_px
+            entry_fee = float(order_res.get("commission", 0.0) or 0.0)
+            total_debit = gross + entry_fee
+            if shares <= 0 or total_debit > state["cash"]:
+                warnings_list.append(f"IBKR BUY {ticker} rejected by cash check")
+                continue
+
         state["cash"] -= total_debit
         positions[ticker] = {
             "ticker": ticker,
@@ -1602,6 +1756,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             "open_positions": int(len(positions)),
         }
     )
+    if ibkr is not None:
+        ibkr.disconnect()
 
     save_paper_state(state_path, state)
     report_paths, daily_latest = export_paper_reports(state_path, state)
@@ -1614,6 +1770,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         daily_win_rate = float(daily_win_rate)
 
     return {
+        "paper_broker": state.get("paper_broker", broker),
         "state_path": state_path,
         "trades_path": report_paths["trades_csv"],
         "equity_curve_path": report_paths["equity_csv"],
@@ -1641,6 +1798,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         "daily_actions": int(daily_latest.get("actions", 0) or 0),
         "daily_closed_pnl": float(daily_latest.get("closed_pnl", 0.0) or 0.0),
         "daily_realized_pnl": float(daily_latest.get("realized_pnl_today", 0.0) or 0.0),
+        "warnings": warnings_list,
     }
 
 
@@ -1658,6 +1816,7 @@ def print_paper_summary(summary: dict):
         pf_txt = f"{float(profit_factor):.2f}"
 
     print("\n  Paper:")
+    print(f"   Broker={summary.get('paper_broker', 'local')}")
     print(f"   Equity={summary['equity']:.2f} | Cash={summary['cash']:.2f} "
           f"| Realized={summary['realized_pnl']:+.2f} | Unrealized={summary['unrealized_pnl']:+.2f} "
           f"| Positions={summary['positions']}")
@@ -1675,6 +1834,8 @@ def print_paper_summary(summary: dict):
               f"| Actions={summary.get('daily_actions', 0)}")
     if summary.get("actions"):
         print(f"   Actions: {', '.join(summary['actions'][:5])}")
+    if summary.get("warnings"):
+        print(f"   Warnings: {', '.join(summary['warnings'][:3])}")
     print(f"   State: {summary['state_path']}")
     if summary.get("trades_path"):
         print(f"   Trades CSV: {summary['trades_path']}")
@@ -1763,6 +1924,20 @@ def main():
                         help="Reinitialise l'etat paper trading avant execution")
     parser.add_argument("--paper-webhook", type=str, default="",
                         help="Webhook URL pour alertes paper (Discord/Slack)")
+    parser.add_argument("--paper-broker", type=str, default=os.getenv("BUBO_PAPER_BROKER", "local"),
+                        help="Broker paper: local|ibkr")
+    parser.add_argument("--ibkr-host", type=str, default=os.getenv("BUBO_IBKR_HOST", "127.0.0.1"),
+                        help="IBKR host (TWS/Gateway)")
+    parser.add_argument("--ibkr-port", type=int, default=int(os.getenv("BUBO_IBKR_PORT", "7497")),
+                        help="IBKR port (paper often 7497)")
+    parser.add_argument("--ibkr-client-id", type=int, default=int(os.getenv("BUBO_IBKR_CLIENT_ID", "42")),
+                        help="IBKR client id")
+    parser.add_argument("--ibkr-account", type=str, default=os.getenv("BUBO_IBKR_ACCOUNT", ""),
+                        help="IBKR account id (optionnel)")
+    parser.add_argument("--ibkr-exchange", type=str, default=os.getenv("BUBO_IBKR_EXCHANGE", "SMART"),
+                        help="IBKR stock exchange route")
+    parser.add_argument("--ibkr-currency", type=str, default=os.getenv("BUBO_IBKR_CURRENCY", "USD"),
+                        help="IBKR contract currency")
     args = parser.parse_args()
     paper_state_path = args.paper_state
 
@@ -1785,6 +1960,13 @@ def main():
     cfg = EngineConfig()
     cfg.initial_capital = args.capital
     cfg.use_finbert = not args.no_finbert
+    cfg.paper_broker = _normalize_paper_broker(args.paper_broker)
+    cfg.ibkr_host = str(args.ibkr_host).strip() or "127.0.0.1"
+    cfg.ibkr_port = int(args.ibkr_port)
+    cfg.ibkr_client_id = int(args.ibkr_client_id)
+    cfg.ibkr_account = str(args.ibkr_account).strip()
+    cfg.ibkr_exchange = str(args.ibkr_exchange).strip() or "SMART"
+    cfg.ibkr_currency = str(args.ibkr_currency).strip().upper() or "USD"
 
     if args.tickers:
         cfg.tickers = args.tickers

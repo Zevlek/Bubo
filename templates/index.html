@@ -333,6 +333,45 @@
         <label class="label" for="paper_webhook">Paper webhook</label>
         <input id="paper_webhook" type="text" value="{{ defaults.paper_webhook }}" placeholder="https://...">
 
+        <div class="row-2">
+          <div>
+            <label class="label" for="paper_broker">Paper broker</label>
+            <select id="paper_broker" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
+              <option value="local" {% if defaults.paper_broker == "local" %}selected{% endif %}>local</option>
+              <option value="ibkr" {% if defaults.paper_broker == "ibkr" %}selected{% endif %}>ibkr</option>
+            </select>
+          </div>
+          <div>
+            <label class="label" for="ibkr_account">IBKR account (opt.)</label>
+            <input id="ibkr_account" type="text" value="{{ defaults.ibkr_account }}">
+          </div>
+        </div>
+
+        <div class="row-2">
+          <div>
+            <label class="label" for="ibkr_host">IBKR host</label>
+            <input id="ibkr_host" type="text" value="{{ defaults.ibkr_host }}">
+          </div>
+          <div>
+            <label class="label" for="ibkr_port">IBKR port</label>
+            <input id="ibkr_port" type="number" min="1" value="{{ defaults.ibkr_port }}">
+          </div>
+        </div>
+
+        <div class="row-2">
+          <div>
+            <label class="label" for="ibkr_client_id">IBKR client id</label>
+            <input id="ibkr_client_id" type="number" min="1" value="{{ defaults.ibkr_client_id }}">
+          </div>
+          <div>
+            <label class="label" for="ibkr_exchange">IBKR exchange</label>
+            <input id="ibkr_exchange" type="text" value="{{ defaults.ibkr_exchange }}">
+          </div>
+        </div>
+
+        <label class="label" for="ibkr_currency">IBKR currency</label>
+        <input id="ibkr_currency" type="text" value="{{ defaults.ibkr_currency }}">
+
         <div class="checks">
           <label><input id="paper_enabled" type="checkbox" {% if defaults.paper_enabled %}checked{% endif %}> Activer paper trading</label>
           <label><input id="no_finbert" type="checkbox" {% if defaults.no_finbert %}checked{% endif %}> No FinBERT (plus leger)</label>
@@ -398,6 +437,13 @@
         capital: Number(document.getElementById("capital").value || 10000),
         paper_state: document.getElementById("paper_state").value.trim(),
         paper_webhook: document.getElementById("paper_webhook").value.trim(),
+        paper_broker: document.getElementById("paper_broker").value,
+        ibkr_host: document.getElementById("ibkr_host").value.trim(),
+        ibkr_port: Number(document.getElementById("ibkr_port").value || 7497),
+        ibkr_client_id: Number(document.getElementById("ibkr_client_id").value || 42),
+        ibkr_account: document.getElementById("ibkr_account").value.trim(),
+        ibkr_exchange: document.getElementById("ibkr_exchange").value.trim(),
+        ibkr_currency: document.getElementById("ibkr_currency").value.trim(),
         paper_enabled: document.getElementById("paper_enabled").checked,
         no_finbert: document.getElementById("no_finbert").checked,
         no_budget_gate: document.getElementById("no_budget_gate").checked

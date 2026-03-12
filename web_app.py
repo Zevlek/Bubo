@@ -107,6 +107,13 @@ def get_default_config() -> dict[str, Any]:
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),
         "paper_state": os.getenv("BUBO_PAPER_STATE", "data/paper_portfolio_state.json"),
         "paper_webhook": os.getenv("BUBO_PAPER_WEBHOOK", ""),
+        "paper_broker": os.getenv("BUBO_PAPER_BROKER", "local"),
+        "ibkr_host": os.getenv("BUBO_IBKR_HOST", "127.0.0.1"),
+        "ibkr_port": _coerce_int(os.getenv("BUBO_IBKR_PORT", "7497"), 7497, minimum=1),
+        "ibkr_client_id": _coerce_int(os.getenv("BUBO_IBKR_CLIENT_ID", "42"), 42, minimum=1),
+        "ibkr_account": os.getenv("BUBO_IBKR_ACCOUNT", ""),
+        "ibkr_exchange": os.getenv("BUBO_IBKR_EXCHANGE", "SMART"),
+        "ibkr_currency": os.getenv("BUBO_IBKR_CURRENCY", "USD"),
         "no_finbert": _env_bool("BUBO_NO_FINBERT", True),
         "no_budget_gate": _env_bool("BUBO_NO_BUDGET_GATE", False),
     }
@@ -122,13 +129,27 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg["paper_state"] = str(payload.get("paper_state") or "").strip()
     if "paper_webhook" in payload:
         cfg["paper_webhook"] = str(payload.get("paper_webhook") or "").strip()
+    if "paper_broker" in payload:
+        cfg["paper_broker"] = str(payload.get("paper_broker") or "").strip().lower()
+    if "ibkr_host" in payload:
+        cfg["ibkr_host"] = str(payload.get("ibkr_host") or "").strip()
+    if "ibkr_account" in payload:
+        cfg["ibkr_account"] = str(payload.get("ibkr_account") or "").strip()
+    if "ibkr_exchange" in payload:
+        cfg["ibkr_exchange"] = str(payload.get("ibkr_exchange") or "").strip().upper()
+    if "ibkr_currency" in payload:
+        cfg["ibkr_currency"] = str(payload.get("ibkr_currency") or "").strip().upper()
 
     cfg["preselect_top"] = _coerce_int(payload.get("preselect_top", cfg["preselect_top"]), cfg["preselect_top"], minimum=1)
     cfg["max_deep"] = _coerce_int(payload.get("max_deep", cfg["max_deep"]), cfg["max_deep"], minimum=1)
     cfg["capital"] = _coerce_float(payload.get("capital", cfg["capital"]), cfg["capital"], minimum=1.0)
+    cfg["ibkr_port"] = _coerce_int(payload.get("ibkr_port", cfg["ibkr_port"]), cfg["ibkr_port"], minimum=1)
+    cfg["ibkr_client_id"] = _coerce_int(payload.get("ibkr_client_id", cfg["ibkr_client_id"]), cfg["ibkr_client_id"], minimum=1)
     cfg["paper_enabled"] = _coerce_bool(payload.get("paper_enabled"), cfg["paper_enabled"])
     cfg["no_finbert"] = _coerce_bool(payload.get("no_finbert"), cfg["no_finbert"])
     cfg["no_budget_gate"] = _coerce_bool(payload.get("no_budget_gate"), cfg["no_budget_gate"])
+    if cfg["paper_broker"] not in {"local", "ibkr"}:
+        cfg["paper_broker"] = "local"
     return cfg
 
 
@@ -160,6 +181,14 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.extend(["--paper-state", cfg["paper_state"]])
     if cfg["paper_webhook"]:
         cmd.extend(["--paper-webhook", cfg["paper_webhook"]])
+    cmd.extend(["--paper-broker", str(cfg["paper_broker"])])
+    cmd.extend(["--ibkr-host", str(cfg["ibkr_host"])])
+    cmd.extend(["--ibkr-port", str(cfg["ibkr_port"])])
+    cmd.extend(["--ibkr-client-id", str(cfg["ibkr_client_id"])])
+    if cfg["ibkr_account"]:
+        cmd.extend(["--ibkr-account", str(cfg["ibkr_account"])])
+    cmd.extend(["--ibkr-exchange", str(cfg["ibkr_exchange"])])
+    cmd.extend(["--ibkr-currency", str(cfg["ibkr_currency"])])
     if cfg["no_finbert"]:
         cmd.append("--no-finbert")
 

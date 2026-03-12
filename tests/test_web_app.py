@@ -42,6 +42,13 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("data/custom_state.json", cmd)
         self.assertIn("--paper-webhook", cmd)
         self.assertIn("https://example.invalid/webhook", cmd)
+        self.assertIn("--paper-broker", cmd)
+        self.assertIn("local", cmd)
+        self.assertIn("--ibkr-host", cmd)
+        self.assertIn("--ibkr-port", cmd)
+        self.assertIn("--ibkr-client-id", cmd)
+        self.assertIn("--ibkr-exchange", cmd)
+        self.assertIn("--ibkr-currency", cmd)
         self.assertIn("--no-finbert", cmd)
         self.assertIn("--no-budget-gate", cmd)
         self.assertTrue(cfg["paper_enabled"])
@@ -56,6 +63,13 @@ class WebAppTests(unittest.TestCase):
                 "paper_enabled": False,
                 "no_finbert": False,
                 "paper_webhook": "",
+                "paper_broker": "ibkr",
+                "ibkr_host": "127.0.0.1",
+                "ibkr_port": 7497,
+                "ibkr_client_id": 99,
+                "ibkr_account": "DU123",
+                "ibkr_exchange": "SMART",
+                "ibkr_currency": "USD",
             },
         )
         self.assertIn("--screen-only", cmd)
@@ -63,6 +77,10 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("--paper", cmd)
         self.assertNotIn("--no-finbert", cmd)
         self.assertNotIn("--paper-webhook", cmd)
+        self.assertIn("--paper-broker", cmd)
+        self.assertIn("ibkr", cmd)
+        self.assertIn("--ibkr-account", cmd)
+        self.assertIn("DU123", cmd)
 
     def test_invalid_mode_raises(self):
         with self.assertRaises(ValueError):

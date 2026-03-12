@@ -75,6 +75,13 @@ services:
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
+      BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
+      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-127.0.0.1}
+      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-7497}
+      BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
+      BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
+      BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
+      BUBO_IBKR_CURRENCY: ${BUBO_IBKR_CURRENCY:-USD}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
@@ -121,6 +128,13 @@ services:
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
+      BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
+      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-127.0.0.1}
+      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-7497}
+      BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
+      BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
+      BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
+      BUBO_IBKR_CURRENCY: ${BUBO_IBKR_CURRENCY:-USD}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
@@ -186,6 +200,13 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
 | `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |
+| `BUBO_PAPER_BROKER` | Moteur paper: local ou ordres paper IBKR | Non | `local` ou `ibkr` | `local` |
+| `BUBO_IBKR_HOST` | Host TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `127.0.0.1` | `127.0.0.1` |
+| `BUBO_IBKR_PORT` | Port TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `7497` (paper) | `7497` |
+| `BUBO_IBKR_CLIENT_ID` | Client id IB API | Non (utile si broker=`ibkr`) | Entier `>= 1` | `42` |
+| `BUBO_IBKR_ACCOUNT` | Compte paper IBKR (optionnel) | Non | Ex: `DUXXXXXX` | vide |
+| `BUBO_IBKR_EXCHANGE` | Routing exchange IBKR | Non (utile si broker=`ibkr`) | Ex: `SMART` | `SMART` |
+| `BUBO_IBKR_CURRENCY` | Devise contrat actions | Non (utile si broker=`ibkr`) | Ex: `USD`, `EUR` | `USD` |
 | `BUBO_NO_FINBERT` | Desactive FinBERT si `1` | Non | `0` (actif) ou `1` (desactive) | `1` |
 | `BUBO_NO_BUDGET_GATE` | Desactive gate budget API si `1` | Non | `0` ou `1` | `0` |
 | `GEMINI_API_KEY` | Cle Gemini pour `bubo_brain.py` | Non (requise seulement si feature utilisee) | Cle API Google Gemini ou vide | vide |
@@ -199,6 +220,36 @@ Notes compatibilite:
 - Le code accepte aussi `NEWSAPI_KEY` en alternative a `BUBO_NEWSAPI_KEY`.
 - Le code accepte aussi `FINNHUB_KEY` en alternative a `BUBO_FINNHUB_KEY`.
 - Le code accepte aussi `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `REDDIT_USER_AGENT` en alternatives aux variables `BUBO_*`.
+
+## Test paper trading IBKR
+
+1. Activer l'API dans TWS/IB Gateway paper:
+- `Enable ActiveX and Socket Clients`
+- autoriser `127.0.0.1`
+- port paper (souvent `7497`)
+
+2. Configurer `.env`:
+
+```env
+BUBO_PAPER_BROKER=ibkr
+BUBO_IBKR_HOST=127.0.0.1
+BUBO_IBKR_PORT=7497
+BUBO_IBKR_CLIENT_ID=42
+BUBO_IBKR_ACCOUNT=DUXXXXXX
+BUBO_IBKR_EXCHANGE=SMART
+BUBO_IBKR_CURRENCY=USD
+```
+
+3. Installer deps IA (inclut `ib_insync`) puis lancer:
+
+```bash
+INSTALL_AI_DEPS=1 docker compose build
+docker compose up -d
+```
+
+Notes:
+- si la connexion IBKR echoue, BUBO bascule automatiquement en mode `local` pour ne pas bloquer le cycle.
+- en mode `ibkr`, les commissions/fills sont pris depuis les retours d'ordre paper IBKR quand disponibles.
 
 ## Mise a jour sur NAS
 

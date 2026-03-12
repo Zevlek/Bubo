@@ -55,6 +55,7 @@ class PaperTradingTests(unittest.TestCase):
             }
             summary_buy = self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
             self.assertEqual(summary_buy["positions"], 1)
+            self.assertEqual(summary_buy["paper_broker"], "local")
             self.assertTrue(any(a.startswith("BUY AAA") for a in summary_buy["actions"]))
 
             persisted = load_paper_state(str(state_path), self.cfg)
@@ -150,6 +151,33 @@ class PaperTradingTests(unittest.TestCase):
             summary = self._run_cycle(buy_signal, {"AAA": None}, state_path)
             self.assertEqual(summary["positions"], 0)
             self.assertEqual(summary["actions"], [])
+
+    def test_ibkr_unavailable_falls_back_to_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+            self.cfg.paper_broker = "ibkr"
+            buy_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 82.0,
+                    "confidence": 82.0,
+                }
+            }
+            original_connect = bubo_engine.IBKRPaperAdapter.connect
+            try:
+                def _fail_connect(_self):
+                    raise RuntimeError("unreachable")
+
+                bubo_engine.IBKRPaperAdapter.connect = _fail_connect
+                summary = self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
+            finally:
+                bubo_engine.IBKRPaperAdapter.connect = original_connect
+                self.cfg.paper_broker = "local"
+
+            self.assertEqual(summary["paper_broker"], "local")
+            self.assertTrue(any("fallback local" in w for w in summary.get("warnings", [])))
 
     def test_notify_webhook_skips_when_no_actions(self):
         ok, reason = notify_paper_webhook(
