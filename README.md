@@ -2,6 +2,7 @@
 
 BUBO est un moteur de trading moyen terme avec prescreening d'univers, scoring multi-signaux et mode paper trading.
 Le mode de deploiement cible est Docker (NAS/serveur) avec interface web sur le port `7654`.
+L'image Docker est basee sur `python:3.12-slim` (necessaire notamment pour `pandas-ta`).
 
 Ce README est la source de verite pour l'execution.
 Les fichiers Compose de reference sont:
