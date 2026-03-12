@@ -153,30 +153,50 @@ services:
     restart: unless-stopped
 ```
 
-## Configuration API (via Compose/.env uniquement)
+## A quoi sert Watchtower ?
 
-Tu peux tout configurer sans modifier le code:
+`watchtower` (image `containrrr/watchtower`) est un service optionnel qui:
+- surveille les nouvelles versions d'image Docker,
+- pull automatiquement la nouvelle image,
+- redemarre le container cible (`bubo-web`).
 
-- `GEMINI_API_KEY` -> LLM principal (`bubo_brain.py`)
-- `BUBO_NEWSAPI_KEY` (ou `NEWSAPI_KEY`) -> news sentiment (`phase2b_sentiment.py`)
-- `BUBO_FINNHUB_KEY` (ou `FINNHUB_KEY`) -> events/news feed (`phase2b_sentiment.py`)
-- `BUBO_REDDIT_CLIENT_ID` (ou `REDDIT_CLIENT_ID`) -> social (`phase3b_social.py`)
-- `BUBO_REDDIT_CLIENT_SECRET` (ou `REDDIT_CLIENT_SECRET`) -> social (`phase3b_social.py`)
-- `BUBO_REDDIT_USER_AGENT` (ou `REDDIT_USER_AGENT`) -> social (`phase3b_social.py`)
-- `BUBO_PAPER_WEBHOOK` -> alertes paper trading (`bubo_engine.py`)
+Dans ce projet il est desactive par defaut (profile `autoupdate`).
+Tu l'actives seulement si tu veux des mises a jour automatiques.
 
-Le fichier `.env.example` contient deja toutes les cles.
+## Variables docker-compose (.env)
 
-## Variables importantes
+Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers compose.
 
-- `BUBO_WEB_PORT=7654`
-- `BUBO_WEB_AUTH_ENABLED=1`
-- `BUBO_WEB_USER=admin`
-- `BUBO_WEB_PASSWORD=...`
-- `BUBO_WEB_SECRET=...`
-- `BUBO_PRESELECT_TOP=60`
-- `BUBO_MAX_DEEP=20`
-- `BUBO_NO_FINBERT=1` (mettre `0` si modele local actif)
+| Variable | Utilite | Obligatoire | Valeurs possibles | Defaut |
+| --- | --- | --- | --- | --- |
+| `TZ` | Fuseau horaire du container | Non | Ex: `Europe/Paris`, `UTC` | `Europe/Paris` |
+| `INSTALL_AI_DEPS` | Installe les deps IA optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers/praw/google-genai) | `0` |
+| `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
+| `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
+| `BUBO_WEB_AUTH_ENABLED` | Active le login UI | Non | `0` ou `1` | `1` |
+| `BUBO_WEB_USER` | Utilisateur login UI | Requis si auth active | Texte libre (ex: `admin`) | `admin` |
+| `BUBO_WEB_PASSWORD` | Mot de passe login UI | Requis si auth active (fortement recommande) | Texte libre | `change-me` |
+| `BUBO_WEB_SECRET` | Secret de session Flask | Requis en production | Chaine longue aleatoire | `change-this-secret` |
+| `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_global_v1.txt`) | `data/universe_global_v1.txt` |
+| `BUBO_PRESELECT_TOP` | Taille shortlist apres prescan | Non | Entier `>= 1` | `60` |
+| `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `20` |
+| `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
+| `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
+| `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
+| `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |
+| `BUBO_NO_FINBERT` | Desactive FinBERT si `1` | Non | `0` (actif) ou `1` (desactive) | `1` |
+| `BUBO_NO_BUDGET_GATE` | Desactive gate budget API si `1` | Non | `0` ou `1` | `0` |
+| `GEMINI_API_KEY` | Cle Gemini pour `bubo_brain.py` | Non (requise seulement si feature utilisee) | Cle API Google Gemini ou vide | vide |
+| `BUBO_NEWSAPI_KEY` | Cle NewsAPI pour sentiment news | Non (requise pour news) | Cle API ou vide | vide |
+| `BUBO_FINNHUB_KEY` | Cle Finnhub pour events/news feed | Non (requise pour Finnhub) | Cle API ou vide | vide |
+| `BUBO_REDDIT_CLIENT_ID` | Reddit API client id | Non (requis avec les 2 autres Reddit pour social) | Valeur OAuth Reddit ou vide | vide |
+| `BUBO_REDDIT_CLIENT_SECRET` | Reddit API client secret | Non (requis avec les 2 autres Reddit pour social) | Valeur OAuth Reddit ou vide | vide |
+| `BUBO_REDDIT_USER_AGENT` | Reddit API user-agent | Non (requis avec les 2 autres Reddit pour social) | Ex: `Bubo/1.0 by u/USERNAME` | vide dans compose / exemple rempli dans `.env.example` |
+
+Notes compatibilite:
+- Le code accepte aussi `NEWSAPI_KEY` en alternative a `BUBO_NEWSAPI_KEY`.
+- Le code accepte aussi `FINNHUB_KEY` en alternative a `BUBO_FINNHUB_KEY`.
+- Le code accepte aussi `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `REDDIT_USER_AGENT` en alternatives aux variables `BUBO_*`.
 
 ## Mise a jour sur NAS
 
