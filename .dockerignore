@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__/
+tests/__pycache__/
+*.py[cod]
+*.bak
+archive/
+charts/
+data/news_cache/
+data/social_cache/
+data/*.csv
+*.md

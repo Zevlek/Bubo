@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BUBO Login</title>
+  <style>
+    :root {
+      --bg: #f2f5f8;
+      --card: #ffffff;
+      --ink: #123344;
+      --muted: #5f7482;
+      --accent: #0b7a75;
+      --line: #d4dde5;
+      --danger-bg: #fde7e5;
+      --danger-ink: #8a2f23;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(700px 300px at 20% 0%, #d5e6f5 0%, transparent 60%),
+        radial-gradient(700px 300px at 100% 100%, #fdeac8 0%, transparent 60%),
+        var(--bg);
+    }
+
+    .card {
+      width: min(92vw, 420px);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 10px 28px rgba(13, 43, 61, 0.15);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.25rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    label {
+      display: block;
+      margin: 10px 0 5px;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid #c6d2db;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      color: var(--ink);
+      background: #fbfdff;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 14px;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .error {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: var(--danger-bg);
+      color: var(--danger-ink);
+      border: 1px solid #efb0a8;
+      font-size: 0.86rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>BUBO Control Room</h1>
+    <p>Connexion requise pour acceder au panneau de controle.</p>
+    <form method="post">
+      <label for="username">Utilisateur</label>
+      <input id="username" name="username" type="text" required autocomplete="username">
+
+      <label for="password">Mot de passe</label>
+      <input id="password" name="password" type="password" required autocomplete="current-password">
+
+      <button type="submit">Se connecter</button>
+    </form>
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+  </main>
+</body>
+</html>

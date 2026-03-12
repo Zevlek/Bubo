@@ -1,0 +1,10 @@
+__pycache__/
+tests/__pycache__/
+*.py[cod]
+*.bak
+
+# Regenerable artifacts
+charts/*
+data/news_cache/
+data/social_cache/
+data/*.csv

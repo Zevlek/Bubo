@@ -1,0 +1,47 @@
+name: Publish Docker Image (GHCR)
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image name
+        id: vars
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image=ghcr.io/${OWNER}/bubo-trading" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            INSTALL_AI_DEPS=0
+          tags: |
+            ${{ steps.vars.outputs.image }}:latest
+            ${{ steps.vars.outputs.image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

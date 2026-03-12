@@ -1,0 +1,10 @@
+{
+  "reddit_client_id": "YOUR_REDDIT_CLIENT_ID",
+  "reddit_client_secret": "YOUR_REDDIT_CLIENT_SECRET",
+  "reddit_user_agent": "Bubo/1.0 (Trading sentiment bot)",
+  "x_bearer_token": "YOUR_X_BEARER_TOKEN",
+  "_instructions": {
+    "reddit": "1. Aller sur https://www.reddit.com/prefs/apps  2. Cr\u00e9er une app 'script'  3. Copier client_id (sous le nom) et client_secret",
+    "x_twitter": "1. Aller sur https://developer.x.com  2. Cr\u00e9er un projet (Basic = $100/mois)  3. Copier le Bearer Token  4. OPTIONNEL: X fonctionne sans cl\u00e9 via fallback RSS"
+  }
+}

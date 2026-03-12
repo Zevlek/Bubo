@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BUBO Control Room</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --bg-alt: #e6edf2;
+      --card: #ffffff;
+      --ink: #10212f;
+      --muted: #5d7282;
+      --accent: #0b7a75;
+      --accent-2: #f3a712;
+      --danger: #c0392b;
+      --ok: #1e8449;
+      --line: #d5dde4;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 10% -20%, #cfe5f6 0%, transparent 60%),
+        radial-gradient(900px 500px at 100% 0%, #fde6bd 0%, transparent 55%),
+        var(--bg);
+    }
+
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 20px 18px 40px;
+    }
+
+    .hero {
+      background: linear-gradient(130deg, #0b7a75 0%, #0f5f83 55%, #103c58 100%);
+      color: #f6fcff;
+      border-radius: 16px;
+      padding: 20px 22px;
+      box-shadow: 0 12px 26px rgba(13, 54, 78, 0.25);
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 1.55rem;
+      letter-spacing: 0.4px;
+    }
+
+    .hero p {
+      margin: 8px 0 0;
+      color: #d7ecf8;
+      font-size: 0.95rem;
+    }
+
+    .hero-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .hero-auth {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      color: #d7ecf8;
+    }
+
+    .hero-auth form { margin: 0; }
+
+    .hero-auth button {
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      background: rgba(255, 255, 255, 0.12);
+      color: #f7fcff;
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.8rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 4px 14px rgba(16, 33, 47, 0.08);
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+      color: var(--ink);
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 0.92rem;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #8b9baa;
+      box-shadow: 0 0 0 3px rgba(139, 155, 170, 0.18);
+    }
+
+    .dot.run {
+      background: var(--ok);
+      box-shadow: 0 0 0 3px rgba(30, 132, 73, 0.2);
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin: 8px 0 4px;
+      display: block;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      border: 1px solid #c5d1da;
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      font-size: 0.92rem;
+      color: var(--ink);
+      background: #fbfdff;
+    }
+
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .checks {
+      margin-top: 10px;
+      display: grid;
+      gap: 6px;
+      color: var(--ink);
+      font-size: 0.9rem;
+    }
+
+    .checks label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      transition: transform 0.08s ease, opacity 0.2s ease;
+    }
+
+    button:active { transform: translateY(1px); }
+
+    .btn-main { background: var(--accent); color: #fff; }
+    .btn-soft { background: #e9f6f5; color: #0f6762; border: 1px solid #bcdedc; }
+    .btn-warn { background: #fff3dd; color: #8b5e00; border: 1px solid #ffd98b; }
+    .btn-stop { background: #fde6e3; color: var(--danger); border: 1px solid #f0b8b0; }
+
+    .hint {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      line-height: 1.3;
+    }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      gap: 10px;
+    }
+
+    .toolbar small {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    #logs {
+      width: 100%;
+      min-height: 360px;
+      max-height: 360px;
+      margin: 0;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid #123448;
+      background: #112c3d;
+      color: #d9edf7;
+      padding: 10px;
+      font-family: "IBM Plex Mono", "Consolas", monospace;
+      font-size: 0.8rem;
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      min-width: 540px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid #e3e9ee;
+    }
+
+    th {
+      background: #f3f7fa;
+      color: #2c4759;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    td a {
+      color: #0a6f8f;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .msg {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 0.86rem;
+      background: #eff3f7;
+      color: #234052;
+      border: 1px solid #d1dbe3;
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+    }
+
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      #logs { min-height: 280px; max-height: 280px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="hero-top">
+        <h1>BUBO Control Room</h1>
+        {% if auth_enabled %}
+        <div class="hero-auth">
+          <span>Connecte: {{ auth_user }}</span>
+          <form action="/logout" method="post">
+            <button type="submit">Se deconnecter</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+      <p>Interface web pour piloter le moteur de trading sur le NAS, suivre les logs et recuperer les exports.</p>
+    </section>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Execution</h2>
+        <div class="status">
+          <span id="run-dot" class="dot"></span>
+          <strong id="run-state">Idle</strong>
+        </div>
+        <div id="status-details" class="hint">Timezone: {{ timezone }}</div>
+
+        <label class="label" for="universe_file">Universe file</label>
+        <input id="universe_file" type="text" value="{{ defaults.universe_file }}">
+
+        <div class="row-2">
+          <div>
+            <label class="label" for="preselect_top">Preselect top</label>
+            <input id="preselect_top" type="number" min="1" value="{{ defaults.preselect_top }}">
+          </div>
+          <div>
+            <label class="label" for="max_deep">Max deep</label>
+            <input id="max_deep" type="number" min="1" value="{{ defaults.max_deep }}">
+          </div>
+        </div>
+
+        <div class="row-2">
+          <div>
+            <label class="label" for="capital">Capital</label>
+            <input id="capital" type="number" min="1" step="100" value="{{ defaults.capital }}">
+          </div>
+          <div>
+            <label class="label" for="paper_state">Paper state</label>
+            <input id="paper_state" type="text" value="{{ defaults.paper_state }}">
+          </div>
+        </div>
+
+        <label class="label" for="paper_webhook">Paper webhook</label>
+        <input id="paper_webhook" type="text" value="{{ defaults.paper_webhook }}" placeholder="https://...">
+
+        <div class="checks">
+          <label><input id="paper_enabled" type="checkbox" {% if defaults.paper_enabled %}checked{% endif %}> Activer paper trading</label>
+          <label><input id="no_finbert" type="checkbox" {% if defaults.no_finbert %}checked{% endif %}> No FinBERT (plus leger)</label>
+          <label><input id="no_budget_gate" type="checkbox" {% if defaults.no_budget_gate %}checked{% endif %}> No budget gate</label>
+        </div>
+
+        <div class="actions">
+          <button class="btn-main" id="btn-watch">Start Watch</button>
+          <button class="btn-soft" id="btn-once">Run Once</button>
+          <button class="btn-warn" id="btn-screen">Screen Only</button>
+          <button class="btn-stop" id="btn-stop">Stop</button>
+        </div>
+
+        <div class="msg" id="message-box">Pret.</div>
+      </section>
+
+      <section class="card">
+        <div class="toolbar">
+          <h2>Logs Live</h2>
+          <small id="log-meta">tail 300</small>
+        </div>
+        <pre id="logs"></pre>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top: 16px;">
+      <div class="toolbar">
+        <h2>Fichiers de sortie</h2>
+        <small>data/ et charts/ (hors cache)</small>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Fichier</th>
+              <th>Scope</th>
+              <th>Taille (KB)</th>
+              <th>Modifie</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="files-body">
+            <tr><td colspan="5">Chargement...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const logsEl = document.getElementById("logs");
+    const filesBodyEl = document.getElementById("files-body");
+    const runDotEl = document.getElementById("run-dot");
+    const runStateEl = document.getElementById("run-state");
+    const statusDetailsEl = document.getElementById("status-details");
+    const messageBoxEl = document.getElementById("message-box");
+
+    function configPayload() {
+      return {
+        universe_file: document.getElementById("universe_file").value.trim(),
+        preselect_top: Number(document.getElementById("preselect_top").value || 60),
+        max_deep: Number(document.getElementById("max_deep").value || 20),
+        capital: Number(document.getElementById("capital").value || 10000),
+        paper_state: document.getElementById("paper_state").value.trim(),
+        paper_webhook: document.getElementById("paper_webhook").value.trim(),
+        paper_enabled: document.getElementById("paper_enabled").checked,
+        no_finbert: document.getElementById("no_finbert").checked,
+        no_budget_gate: document.getElementById("no_budget_gate").checked
+      };
+    }
+
+    function setMessage(text, error = false) {
+      messageBoxEl.textContent = text;
+      messageBoxEl.style.borderColor = error ? "#efb0a8" : "#d1dbe3";
+      messageBoxEl.style.background = error ? "#fce9e6" : "#eff3f7";
+      messageBoxEl.style.color = error ? "#8a2f23" : "#234052";
+    }
+
+    async function callAction(endpoint) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(configPayload())
+        });
+        const data = await res.json();
+        setMessage(data.message || "Action executee", !data.ok);
+        await refreshAll();
+      } catch (err) {
+        setMessage("Erreur reseau: " + err, true);
+      }
+    }
+
+    async function stopProcess() {
+      try {
+        const res = await fetch("/api/stop", { method: "POST" });
+        const data = await res.json();
+        setMessage(data.message || "Stop", !data.ok);
+        await refreshAll();
+      } catch (err) {
+        setMessage("Erreur reseau: " + err, true);
+      }
+    }
+
+    async function refreshStatus() {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+
+      if (data.running) {
+        runDotEl.classList.add("run");
+        runStateEl.textContent = `Running (${data.mode})`;
+      } else {
+        runDotEl.classList.remove("run");
+        runStateEl.textContent = "Idle";
+      }
+
+      const details = [
+        data.pid ? `PID ${data.pid}` : "No active process",
+        data.started_at ? `started ${data.started_at}` : "",
+        data.running ? `uptime ${data.uptime_s}s` : "",
+        data.last_exit_code !== null && data.last_exit_code !== undefined ? `last exit ${data.last_exit_code}` : "",
+        data.last_finished_at ? `finished ${data.last_finished_at}` : ""
+      ].filter(Boolean).join(" | ");
+      statusDetailsEl.textContent = details || "No runtime details";
+    }
+
+    async function refreshLogs() {
+      const res = await fetch("/api/logs?tail=300");
+      const data = await res.json();
+      logsEl.textContent = (data.lines || []).join("\n");
+      logsEl.scrollTop = logsEl.scrollHeight;
+      document.getElementById("log-meta").textContent = `tail ${data.count || 0}`;
+    }
+
+    async function refreshFiles() {
+      const res = await fetch("/api/files?limit=40");
+      const data = await res.json();
+      const files = data.files || [];
+      if (!files.length) {
+        filesBodyEl.innerHTML = "<tr><td colspan='5'>Aucun fichier pour le moment.</td></tr>";
+        return;
+      }
+
+      filesBodyEl.innerHTML = files.map(f => `
+        <tr>
+          <td>${f.name}</td>
+          <td>${f.scope}</td>
+          <td>${f.size_kb}</td>
+          <td>${f.modified}</td>
+          <td><a href="${f.url}" target="_blank" rel="noopener">Download</a></td>
+        </tr>
+      `).join("");
+    }
+
+    async function refreshAll() {
+      await Promise.all([refreshStatus(), refreshLogs(), refreshFiles()]);
+    }
+
+    document.getElementById("btn-watch").addEventListener("click", () => callAction("/api/start-watch"));
+    document.getElementById("btn-once").addEventListener("click", () => callAction("/api/run-once"));
+    document.getElementById("btn-screen").addEventListener("click", () => callAction("/api/screen-only"));
+    document.getElementById("btn-stop").addEventListener("click", stopProcess);
+
+    refreshAll();
+    setInterval(refreshAll, 3500);
+  </script>
+</body>
+</html>
