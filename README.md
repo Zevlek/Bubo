@@ -181,3 +181,17 @@ services:
     command: ["python", "web_app.py", "--host", "0.0.0.0", "--port", "7654"]
     restart: unless-stopped
 ```
+
+## Configuration API via Docker Compose
+
+Toutes les integrations API peuvent etre configurees directement via variables d'environnement (compose/.env):
+
+- `GEMINI_API_KEY` -> Gemini (bubo_brain.py)
+- `BUBO_NEWSAPI_KEY` ou `NEWSAPI_KEY` -> NewsAPI (phase2b)
+- `BUBO_FINNHUB_KEY` ou `FINNHUB_KEY` -> Finnhub (phase2b)
+- `BUBO_REDDIT_CLIENT_ID` ou `REDDIT_CLIENT_ID` -> Reddit API (phase3b)
+- `BUBO_REDDIT_CLIENT_SECRET` ou `REDDIT_CLIENT_SECRET` -> Reddit API (phase3b)
+- `BUBO_REDDIT_USER_AGENT` ou `REDDIT_USER_AGENT` -> Reddit API (phase3b)
+- `BUBO_PAPER_WEBHOOK` -> alertes webhook paper (bubo_engine)
+
+Tu peux donc tout piloter depuis `docker-compose.yml` / `docker-compose.ghcr.yml` sans editer le code.

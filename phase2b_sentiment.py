@@ -1,26 +1,26 @@
-"""
+﻿"""
 Trading Bot - Phase 2b: Analyse de Sentiment News (FinBERT)
 ============================================================
-FinBERT est un modèle BERT fine-tuné sur des textes financiers.
+FinBERT est un modÃ¨le BERT fine-tunÃ© sur des textes financiers.
 Il classifie chaque texte en: positive / negative / neutral
 avec un score de confiance.
 
 Sources de news:
-  - NewsAPI         (news générales, gratuit 100req/j)
+  - NewsAPI         (news gÃ©nÃ©rales, gratuit 100req/j)
   - Yahoo Finance   (via yfinance news)
   - Finnhub         (news par ticker, gratuit 60req/min)
 
 Pipeline:
-  1. Fetch des news par ticker (dernières 24h ou période de backtest)
-  2. Scoring FinBERT sur chaque titre/résumé
-  3. Agrégation en signal journalier [-1, +1]
-  4. Intégration dans le système de score global
+  1. Fetch des news par ticker (derniÃ¨res 24h ou pÃ©riode de backtest)
+  2. Scoring FinBERT sur chaque titre/rÃ©sumÃ©
+  3. AgrÃ©gation en signal journalier [-1, +1]
+  4. IntÃ©gration dans le systÃ¨me de score global
 
 Setup (une seule fois):
     pip install transformers torch sentencepiece
 
-Le modèle FinBERT (~400MB) est téléchargé automatiquement
-depuis HuggingFace lors du premier run et caché localement.
+Le modÃ¨le FinBERT (~400MB) est tÃ©lÃ©chargÃ© automatiquement
+depuis HuggingFace lors du premier run et cachÃ© localement.
 
 Usage:
     python phase2b_sentiment.py
@@ -43,31 +43,43 @@ os.makedirs("data/news_cache", exist_ok=True)
 os.makedirs("charts", exist_ok=True)
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # CONFIG SENTIMENT
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-# Clés API optionnelles — le système fonctionne sans (via yfinance)
-# Pour plus de couverture, obtenez des clés gratuites sur:
+# ClÃ©s API optionnelles â€” le systÃ¨me fonctionne sans (via yfinance)
+# Pour plus de couverture, obtenez des clÃ©s gratuites sur:
 #   NewsAPI  : https://newsapi.org  (100 req/jour gratuit)
 #   Finnhub  : https://finnhub.io   (60 req/min gratuit)
-NEWSAPI_KEY  = ""   # Optionnel
-FINNHUB_KEY  = ""   # Optionnel
+def _first_env(*names: str) -> str:
+    for name in names:
+        val = os.environ.get(name, "")
+        if str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def get_news_api_keys() -> tuple[str, str]:
+    """Resolve keys from env (generic or BUBO_ prefixed names)."""
+    newsapi = _first_env("NEWSAPI_KEY", "BUBO_NEWSAPI_KEY")
+    finnhub = _first_env("FINNHUB_KEY", "BUBO_FINNHUB_KEY")
+    return newsapi, finnhub
+NEWSAPI_KEY, FINNHUB_KEY = get_news_api_keys()
 
 # Seuils de sentiment
-SENTIMENT_POSITIVE_THRESHOLD = 0.15   # score > seuil → signal positif
-SENTIMENT_NEGATIVE_THRESHOLD = -0.15  # score < seuil → signal négatif
+SENTIMENT_POSITIVE_THRESHOLD = 0.15   # score > seuil â†’ signal positif
+SENTIMENT_NEGATIVE_THRESHOLD = -0.15  # score < seuil â†’ signal nÃ©gatif
 
-# Fenêtre de calcul du sentiment (jours)
+# FenÃªtre de calcul du sentiment (jours)
 SENTIMENT_WINDOW_DAYS = 3
 
-# Cache des news (évite de re-fetcher)
+# Cache des news (Ã©vite de re-fetcher)
 CACHE_TTL_HOURS = 6
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # STRUCTURES
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @dataclass
 class NewsArticle:
@@ -86,7 +98,7 @@ class NewsArticle:
 class DailySentiment:
     ticker: str
     date: date
-    sentiment_score: float      # Score agrégé [-1, +1]
+    sentiment_score: float      # Score agrÃ©gÃ© [-1, +1]
     article_count: int
     positive_count: int
     negative_count: int
@@ -96,40 +108,40 @@ class DailySentiment:
     top_headlines: list = field(default_factory=list)
 
 
-# ─────────────────────────────────────────────
-# MODÈLE FINBERT
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# MODÃˆLE FINBERT
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class FinBERTAnalyzer:
     """
     Wrapper autour de FinBERT (ProsusAI/finbert).
-    Charge le modèle une seule fois, analyse en batch pour la rapidité.
-    Utilise le GPU (CUDA) automatiquement si disponible — RTX 5090 = très rapide.
+    Charge le modÃ¨le une seule fois, analyse en batch pour la rapiditÃ©.
+    Utilise le GPU (CUDA) automatiquement si disponible â€” RTX 5090 = trÃ¨s rapide.
     """
 
     MODEL_NAME = "ProsusAI/finbert"
 
     def __init__(self):
         self.pipeline = None
-        self.device = -1  # CPU par défaut
+        self.device = -1  # CPU par dÃ©faut
 
     def load(self):
-        """Charge le modèle FinBERT. Télécharge depuis HuggingFace si nécessaire."""
+        """Charge le modÃ¨le FinBERT. TÃ©lÃ©charge depuis HuggingFace si nÃ©cessaire."""
         try:
             from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
             import torch
 
-            # Détecter GPU
+            # DÃ©tecter GPU
             if torch.cuda.is_available():
                 self.device = 0
                 gpu_name = torch.cuda.get_device_name(0)
                 vram = torch.cuda.get_device_properties(0).total_memory / 1e9
-                print(f"  🎮 GPU détecté: {gpu_name} ({vram:.1f}GB VRAM)")
+                print(f"  ðŸŽ® GPU dÃ©tectÃ©: {gpu_name} ({vram:.1f}GB VRAM)")
             else:
-                print("  💻 GPU non disponible, utilisation CPU")
+                print("  ðŸ’» GPU non disponible, utilisation CPU")
 
-            print(f"  📥 Chargement FinBERT ({self.MODEL_NAME})...")
-            print(f"     Premier lancement: téléchargement ~400MB depuis HuggingFace")
+            print(f"  ðŸ“¥ Chargement FinBERT ({self.MODEL_NAME})...")
+            print(f"     Premier lancement: tÃ©lÃ©chargement ~400MB depuis HuggingFace")
 
             self.pipeline = pipeline(
                 "text-classification",
@@ -140,15 +152,15 @@ class FinBERTAnalyzer:
                 truncation=True,
                 max_length=512,
             )
-            print(f"  ✅ FinBERT chargé")
+            print(f"  âœ… FinBERT chargÃ©")
             return True
 
         except ImportError:
-            print("  ❌ transformers/torch non installés")
+            print("  âŒ transformers/torch non installÃ©s")
             print("     Installez avec: pip install transformers torch sentencepiece")
             return False
         except Exception as e:
-            print(f"  ❌ Erreur chargement FinBERT: {e}")
+            print(f"  âŒ Erreur chargement FinBERT: {e}")
             return False
 
     def analyze_batch(self, texts: list[str]) -> list[dict]:
@@ -160,7 +172,7 @@ class FinBERTAnalyzer:
             return [{"label": "neutral", "score": 0.0, "confidence": 0.0}] * len(texts)
 
         results = []
-        # Batch size adapté à la VRAM — 32 pour une RTX 5090
+        # Batch size adaptÃ© Ã  la VRAM â€” 32 pour une RTX 5090
         batch_size = 32 if self.device == 0 else 8
 
         for i in range(0, len(texts), batch_size):
@@ -190,7 +202,7 @@ class FinBERTAnalyzer:
                         "neu":        round(neu, 4),
                     })
             except Exception as e:
-                print(f"  ⚠️  Erreur batch FinBERT: {e}")
+                print(f"  âš ï¸  Erreur batch FinBERT: {e}")
                 results.extend([{"label": "neutral", "score": 0.0, "confidence": 0.0}] * len(batch))
 
         return results
@@ -201,17 +213,17 @@ class FinBERTAnalyzer:
         return results[0] if results else {"label": "neutral", "score": 0.0, "confidence": 0.0}
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # FETCHERS DE NEWS
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class NewsFetcher:
     """
-    Agrège les news depuis plusieurs sources.
-    Système de cache pour éviter les appels répétés.
+    AgrÃ¨ge les news depuis plusieurs sources.
+    SystÃ¨me de cache pour Ã©viter les appels rÃ©pÃ©tÃ©s.
     """
 
-    # Mapping ticker → mots-clés de recherche
+    # Mapping ticker â†’ mots-clÃ©s de recherche
     TICKER_KEYWORDS = {
         "AM.PA":  ["Dassault Aviation", "Rafale", "Falcon jet"],
         "AIR.PA": ["Airbus", "A320", "A350", "A380"],
@@ -284,12 +296,12 @@ class NewsFetcher:
                     ))
 
         except Exception as e:
-            print(f"  ⚠️  yfinance news {ticker}: {e}")
+            print(f"  âš ï¸  yfinance news {ticker}: {e}")
 
         return articles
 
     def fetch_newsapi(self, ticker: str, start: date, end: date) -> list[NewsArticle]:
-        """Fetch depuis NewsAPI (nécessite une clé API)."""
+        """Fetch depuis NewsAPI (nÃ©cessite une clÃ© API)."""
         if not NEWSAPI_KEY:
             return []
 
@@ -330,17 +342,17 @@ class NewsFetcher:
             return articles
 
         except Exception as e:
-            print(f"  ⚠️  NewsAPI {ticker}: {e}")
+            print(f"  âš ï¸  NewsAPI {ticker}: {e}")
             return []
 
     def fetch_finnhub(self, ticker: str, start: date, end: date) -> list[NewsArticle]:
-        """Fetch depuis Finnhub (nécessite une clé API)."""
+        """Fetch depuis Finnhub (nÃ©cessite une clÃ© API)."""
         if not FINNHUB_KEY:
             return []
 
         try:
             import requests
-            # Finnhub utilise des symboles US — adapter pour Paris
+            # Finnhub utilise des symboles US â€” adapter pour Paris
             fh_ticker = ticker.replace(".PA", "")
 
             url = "https://finnhub.io/api/v1/company-news"
@@ -369,13 +381,13 @@ class NewsFetcher:
             return articles
 
         except Exception as e:
-            print(f"  ⚠️  Finnhub {ticker}: {e}")
+            print(f"  âš ï¸  Finnhub {ticker}: {e}")
             return []
 
     def fetch_all(self, ticker: str,
                   start: date = None,
                   end: date = None) -> list[NewsArticle]:
-        """Agrège les news depuis toutes les sources disponibles."""
+        """AgrÃ¨ge les news depuis toutes les sources disponibles."""
         if end is None:
             end = date.today()
         if start is None:
@@ -392,17 +404,17 @@ class NewsFetcher:
         yf_articles = self.fetch_yfinance_news(ticker)
         articles.extend(yf_articles)
 
-        # Source 2: NewsAPI (si clé disponible)
+        # Source 2: NewsAPI (si clÃ© disponible)
         if NEWSAPI_KEY:
             na_articles = self.fetch_newsapi(ticker, start, end)
             articles.extend(na_articles)
 
-        # Source 3: Finnhub (si clé disponible)
+        # Source 3: Finnhub (si clÃ© disponible)
         if FINNHUB_KEY:
             fh_articles = self.fetch_finnhub(ticker, start, end)
             articles.extend(fh_articles)
 
-        # Déduplication par titre
+        # DÃ©duplication par titre
         seen_titles = set()
         unique = []
         for a in articles:
@@ -417,13 +429,13 @@ class NewsFetcher:
         return unique
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # MOTEUR DE SENTIMENT
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class SentimentEngine:
     """
-    Orchestre le fetch des news + scoring FinBERT + agrégation.
+    Orchestre le fetch des news + scoring FinBERT + agrÃ©gation.
     Produit un score de sentiment journalier par ticker.
     """
 
@@ -432,7 +444,7 @@ class SentimentEngine:
         self.fetcher = fetcher
 
     def _text_for_analysis(self, article: NewsArticle) -> str:
-        """Construit le texte à analyser (titre + résumé tronqué)."""
+        """Construit le texte Ã  analyser (titre + rÃ©sumÃ© tronquÃ©)."""
         parts = [article.title]
         if article.summary:
             parts.append(article.summary[:200])
@@ -458,12 +470,12 @@ class SentimentEngine:
                                  articles: list[NewsArticle],
                                  target_date: date) -> DailySentiment:
         """
-        Agrège les scores des articles en un score journalier.
-        Pondération par:
-          - Confiance du modèle
-          - Fraîcheur de l'article (articles récents = plus de poids)
+        AgrÃ¨ge les scores des articles en un score journalier.
+        PondÃ©ration par:
+          - Confiance du modÃ¨le
+          - FraÃ®cheur de l'article (articles rÃ©cents = plus de poids)
         """
-        # Filtrer les articles de la fenêtre temporelle
+        # Filtrer les articles de la fenÃªtre temporelle
         window_start = datetime.combine(
             target_date - timedelta(days=SENTIMENT_WINDOW_DAYS),
             datetime.min.time()
@@ -498,7 +510,7 @@ class SentimentEngine:
                 avg_confidence=0.0, signal=0,
             )
 
-        # Pondération par fraîcheur (exponentielle, décroit sur 3 jours)
+        # PondÃ©ration par fraÃ®cheur (exponentielle, dÃ©croit sur 3 jours)
         weights = []
         for a in relevant:
             age_days = (window_end - to_naive_dt(a.published_at)).total_seconds() / 86400
@@ -509,7 +521,7 @@ class SentimentEngine:
         total_weight = sum(weights) or 1.0
         scores = [a.sentiment_score for a in relevant]
 
-        # Score pondéré
+        # Score pondÃ©rÃ©
         weighted_score = sum(s * w for s, w in zip(scores, weights)) / total_weight
 
         pos = sum(1 for a in relevant if a.sentiment_label == "positive")
@@ -550,12 +562,12 @@ class SentimentEngine:
                                 start_date: date,
                                 end_date: date) -> pd.DataFrame:
         """
-        Construit une série temporelle de sentiment pour un ticker.
-        Pour le backtest, fetch les news par période.
+        Construit une sÃ©rie temporelle de sentiment pour un ticker.
+        Pour le backtest, fetch les news par pÃ©riode.
         """
-        print(f"  📰 Fetch news {ticker}...")
+        print(f"  ðŸ“° Fetch news {ticker}...")
         articles = self.fetcher.fetch_all(ticker, start_date, end_date)
-        print(f"     {len(articles)} articles récupérés")
+        print(f"     {len(articles)} articles rÃ©cupÃ©rÃ©s")
 
         if not articles:
             return pd.DataFrame()
@@ -563,7 +575,7 @@ class SentimentEngine:
         # Scorer tous les articles
         articles = self.score_articles(articles)
 
-        # Agréger par jour
+        # AgrÃ©ger par jour
         sentiments = []
         current = start_date
         while current <= end_date:
@@ -583,24 +595,24 @@ class SentimentEngine:
         return df
 
     def get_current_sentiment(self, ticker: str) -> DailySentiment:
-        """Sentiment actuel (dernières 72h) — pour le trading live."""
+        """Sentiment actuel (derniÃ¨res 72h) â€” pour le trading live."""
         today = date.today()
         articles = self.fetcher.fetch_all(ticker, today - timedelta(days=3), today)
         articles = self.score_articles(articles)
         return self.compute_daily_sentiment(ticker, articles, today)
 
 
-# ─────────────────────────────────────────────
-# INTÉGRATION DANS LE SCORE GLOBAL
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# INTÃ‰GRATION DANS LE SCORE GLOBAL
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def annotate_with_sentiment(df: pd.DataFrame,
                              sentiment_df: pd.DataFrame) -> pd.DataFrame:
     """
     Fusionne le dataframe OHLCV+signaux avec les scores de sentiment.
-    Le sentiment modifie le score global de deux façons:
-      1. Confirmation: sentiment aligné avec signal technique → boost
-      2. Contradiction: sentiment opposé au signal → réduction
+    Le sentiment modifie le score global de deux faÃ§ons:
+      1. Confirmation: sentiment alignÃ© avec signal technique â†’ boost
+      2. Contradiction: sentiment opposÃ© au signal â†’ rÃ©duction
     """
     df = df.copy()
     df["sentiment_score"]  = 0.0
@@ -634,19 +646,19 @@ def annotate_with_sentiment(df: pd.DataFrame,
 
         # Calcul du boost
         if tech_signal == 1 and s_signal == 1:
-            # Confirmation haussière → boost fort
+            # Confirmation haussiÃ¨re â†’ boost fort
             boost = 1.0 + min(abs(s_score) * 2, 0.5)
         elif tech_signal == 1 and s_signal == -1:
-            # Contradiction → on annule le signal technique
+            # Contradiction â†’ on annule le signal technique
             boost = 0.0
         elif tech_signal == 1 and s_signal == 0:
-            # Sentiment neutre → légère réduction
+            # Sentiment neutre â†’ lÃ©gÃ¨re rÃ©duction
             boost = 0.85
         elif tech_signal == -1 and s_signal == -1:
-            # Confirmation baissière
+            # Confirmation baissiÃ¨re
             boost = 1.0 + min(abs(s_score) * 2, 0.5)
         elif tech_signal == -1 and s_signal == 1:
-            # Contradiction baissière → on annule
+            # Contradiction baissiÃ¨re â†’ on annule
             boost = 0.0
         else:
             boost = 1.0
@@ -662,34 +674,34 @@ def annotate_with_sentiment(df: pd.DataFrame,
     return df
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # RAPPORT SENTIMENT
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def print_sentiment_report(ticker: str, daily: DailySentiment):
     """Affiche le rapport de sentiment pour un ticker."""
-    icons = {"positive": "🟢", "negative": "🔴", "neutral": "🟡"}
-    signal_icons = {1: "📈 BULLISH", -1: "📉 BEARISH", 0: "➡️  NEUTRE"}
+    icons = {"positive": "ðŸŸ¢", "negative": "ðŸ”´", "neutral": "ðŸŸ¡"}
+    signal_icons = {1: "ðŸ“ˆ BULLISH", -1: "ðŸ“‰ BEARISH", 0: "âž¡ï¸  NEUTRE"}
 
     score_bar_len = int(abs(daily.sentiment_score) * 20)
-    bar_char = "█" if daily.sentiment_score >= 0 else "░"
+    bar_char = "â–ˆ" if daily.sentiment_score >= 0 else "â–‘"
     bar = bar_char * score_bar_len
 
-    print(f"\n  {ticker} — {daily.date}")
+    print(f"\n  {ticker} â€” {daily.date}")
     print(f"  Score: {daily.sentiment_score:+.3f} {bar}")
     print(f"  Signal: {signal_icons.get(daily.signal, '?')}")
     print(f"  Articles: {daily.article_count} "
-          f"(🟢{daily.positive_count} 🔴{daily.negative_count} 🟡{daily.neutral_count})")
+          f"(ðŸŸ¢{daily.positive_count} ðŸ”´{daily.negative_count} ðŸŸ¡{daily.neutral_count})")
     print(f"  Confiance moyenne: {daily.avg_confidence:.0%}")
     if daily.top_headlines:
         print(f"  Top headlines:")
         for h in daily.top_headlines:
-            print(f"    · {h}")
+            print(f"    Â· {h}")
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # MAIN
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def main():
     TICKERS = ["AM.PA", "AIR.PA", "LMT", "RTX"]
@@ -699,12 +711,12 @@ def main():
     print("=" * 60)
 
     # 1. Charger FinBERT
-    print("\n🤖 Initialisation FinBERT...")
+    print("\nðŸ¤– Initialisation FinBERT...")
     finbert = FinBERTAnalyzer()
     finbert_ok = finbert.load()
 
     if not finbert_ok:
-        print("\n❌ FinBERT non disponible — vérifiez l'installation:")
+        print("\nâŒ FinBERT non disponible â€” vÃ©rifiez l'installation:")
         print("   pip install transformers torch sentencepiece")
         return
 
@@ -714,7 +726,7 @@ def main():
 
     # 3. Sentiment actuel sur tous les tickers
     print("\n" + "=" * 60)
-    print("📰 SENTIMENT ACTUEL (dernières 72h)")
+    print("ðŸ“° SENTIMENT ACTUEL (derniÃ¨res 72h)")
     print("=" * 60)
 
     current_sentiments = {}
@@ -740,11 +752,11 @@ def main():
         })
 
     pd.DataFrame(sentiment_data).to_csv("data/current_sentiment.csv", index=False)
-    print(f"\n💾 Sentiment sauvegardé: data/current_sentiment.csv")
+    print(f"\nðŸ’¾ Sentiment sauvegardÃ©: data/current_sentiment.csv")
 
-    # 5. Test d'intégration avec Phase 1
+    # 5. Test d'intÃ©gration avec Phase 1
     print("\n" + "=" * 60)
-    print("🔗 TEST INTÉGRATION PHASE 1 + SENTIMENT")
+    print("ðŸ”— TEST INTÃ‰GRATION PHASE 1 + SENTIMENT")
     print("=" * 60)
 
     try:
@@ -760,41 +772,41 @@ def main():
         test_ticker = max(current_sentiments,
                          key=lambda t: current_sentiments[t].article_count)
         print(f"\n  Test sur {test_ticker} "
-              f"({current_sentiments[test_ticker].article_count} articles récents)")
+              f"({current_sentiments[test_ticker].article_count} articles rÃ©cents)")
 
         df = mfetcher.fetch(test_ticker, "1d")
         if df is not None:
             df = analyzer.compute_indicators(df)
             df = analyzer.generate_signals(df)
 
-            # Construire série de sentiment (30 derniers jours pour le test)
+            # Construire sÃ©rie de sentiment (30 derniers jours pour le test)
             end_d   = date.today()
             start_d = end_d - timedelta(days=30)
             sent_series = engine.build_sentiment_series(test_ticker, start_d, end_d)
 
-            # Intégrer
+            # IntÃ©grer
             df_enriched = annotate_with_sentiment(df.tail(30), sent_series)
 
-            # Afficher les signaux modifiés
+            # Afficher les signaux modifiÃ©s
             modified = df_enriched[
                 df_enriched["signal"] != df_enriched["final_signal"]
             ]
             if not modified.empty:
-                print(f"\n  ⚡ Signaux modifiés par le sentiment ({len(modified)}):")
+                print(f"\n  âš¡ Signaux modifiÃ©s par le sentiment ({len(modified)}):")
                 for idx, row in modified.iterrows():
-                    change = f"{int(row['signal'])} → {int(row['final_signal'])}"
+                    change = f"{int(row['signal'])} â†’ {int(row['final_signal'])}"
                     print(f"    {idx.date()} | {change} | "
                           f"Sentiment: {row['sentiment_score']:+.3f} | "
                           f"Boost: {row['sentiment_boost']:.2f}x")
             else:
-                print(f"\n  ℹ️  Aucun signal technique modifié sur les 30 derniers jours")
-                print(f"     (normal si peu de signaux techniques récents)")
+                print(f"\n  â„¹ï¸  Aucun signal technique modifiÃ© sur les 30 derniers jours")
+                print(f"     (normal si peu de signaux techniques rÃ©cents)")
 
     except Exception as e:
-        print(f"  ⚠️  Test intégration: {e}")
+        print(f"  âš ï¸  Test intÃ©gration: {e}")
 
     print("\n" + "=" * 60)
-    print("Phase 2b terminée ✅")
+    print("Phase 2b terminÃ©e âœ…")
     print("\nPour utiliser dans le pipeline global:")
     print("  from phase2b_sentiment import FinBERTAnalyzer, NewsFetcher, SentimentEngine")
     print("  from phase2b_sentiment import annotate_with_sentiment")
@@ -803,3 +815,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

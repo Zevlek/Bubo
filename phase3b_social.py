@@ -161,6 +161,20 @@ def load_config(path: str = "social_config.json") -> SocialConfig:
                 continue
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
+
+    # Env overrides so Docker Compose can configure API credentials directly.
+    env_map = {
+        "reddit_client_id": ["BUBO_REDDIT_CLIENT_ID", "REDDIT_CLIENT_ID"],
+        "reddit_client_secret": ["BUBO_REDDIT_CLIENT_SECRET", "REDDIT_CLIENT_SECRET"],
+        "reddit_user_agent": ["BUBO_REDDIT_USER_AGENT", "REDDIT_USER_AGENT"],
+    }
+    for attr, names in env_map.items():
+        for name in names:
+            val = os.environ.get(name, "")
+            if str(val).strip():
+                setattr(cfg, attr, str(val).strip())
+                break
+
     return cfg
 
 

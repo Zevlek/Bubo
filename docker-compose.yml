@@ -12,6 +12,11 @@ services:
       TZ: ${TZ:-Europe/Paris}
       PYTHONUNBUFFERED: "1"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
+      BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
+      BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
+      BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
+      BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
@@ -29,8 +34,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./charts:/app/charts
-      - ./social_config.json:/app/social_config.json:ro
-      - ./gemini_config.json:/app/gemini_config.json:ro
     ports:
       - "${BUBO_WEB_PORT:-7654}:7654"
     command:

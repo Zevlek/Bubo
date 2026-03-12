@@ -13,6 +13,16 @@ Edite ensuite `.env` et change au minimum:
 
 Port par defaut: `7654`.
 
+Si tu utilises des APIs externes, configure aussi:
+
+- `GEMINI_API_KEY` (Bubo Brain)
+- `BUBO_NEWSAPI_KEY` (news)
+- `BUBO_FINNHUB_KEY` (news)
+- `BUBO_REDDIT_CLIENT_ID` (social)
+- `BUBO_REDDIT_CLIENT_SECRET` (social)
+- `BUBO_REDDIT_USER_AGENT` (social)
+- `BUBO_PAPER_WEBHOOK` (alertes paper)
+
 ## 2) Lancer localement avec build
 
 ```powershell
@@ -77,4 +87,5 @@ docker compose -f docker-compose.ghcr.yml --profile autoupdate up -d
 ## Notes
 
 - `data/` et `charts/` restent sur le NAS via volumes.
+- Les identifiants API sont lus directement depuis les variables d'environnement Docker Compose.
 - Sans GPU NVIDIA, FinBERT tourne en CPU (plus lent).
