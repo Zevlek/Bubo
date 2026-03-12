@@ -42,6 +42,117 @@ docker compose build
 docker compose up -d
 ```
 
+## Exemples docker-compose (qui marchent)
+
+### Exemple A: build local (`docker-compose.yml`)
+
+```yaml
+services:
+  bubo-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_AI_DEPS: ${INSTALL_AI_DEPS:-0}
+    image: bubo-trading:latest
+    container_name: bubo-web
+    working_dir: /app
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+      PYTHONUNBUFFERED: "1"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
+      BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
+      BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
+      BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
+      BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
+      BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
+      BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
+      BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
+      BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
+      BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
+      BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
+      BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
+      BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
+      BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
+      BUBO_WEB_AUTH_ENABLED: ${BUBO_WEB_AUTH_ENABLED:-1}
+      BUBO_WEB_USER: ${BUBO_WEB_USER:-admin}
+      BUBO_WEB_PASSWORD: ${BUBO_WEB_PASSWORD:-change-me}
+      BUBO_WEB_SECRET: ${BUBO_WEB_SECRET:-change-this-secret}
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    ports:
+      - "${BUBO_WEB_PORT:-7654}:7654"
+    command:
+      - python
+      - web_app.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7654"
+    restart: unless-stopped
+```
+
+### Exemple B: pull image GHCR (`docker-compose.ghcr.yml`)
+
+```yaml
+services:
+  bubo-web:
+    image: ${BUBO_IMAGE:-ghcr.io/your-github-user/bubo-trading:latest}
+    container_name: bubo-web
+    working_dir: /app
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+      PYTHONUNBUFFERED: "1"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
+      BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
+      BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
+      BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
+      BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
+      BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
+      BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
+      BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
+      BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
+      BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
+      BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
+      BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
+      BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
+      BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
+      BUBO_WEB_AUTH_ENABLED: ${BUBO_WEB_AUTH_ENABLED:-1}
+      BUBO_WEB_USER: ${BUBO_WEB_USER:-admin}
+      BUBO_WEB_PASSWORD: ${BUBO_WEB_PASSWORD:-change-me}
+      BUBO_WEB_SECRET: ${BUBO_WEB_SECRET:-change-this-secret}
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    ports:
+      - "${BUBO_WEB_PORT:-7654}:7654"
+    command:
+      - python
+      - web_app.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7654"
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: bubo-watchtower
+    profiles: ["autoupdate"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - "--interval"
+      - "300"
+      - "bubo-web"
+    restart: unless-stopped
+```
+
 ## Configuration API (via Compose/.env uniquement)
 
 Tu peux tout configurer sans modifier le code:
