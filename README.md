@@ -126,3 +126,58 @@ python -m unittest discover -s tests -p "test_*.py" -v
 
 Projet expérimental/éducatif. Pas un conseil financier.
 Toujours valider les signaux et les risques avant usage réel.
+
+## Exemples docker-compose
+
+Exemple minimal (build local):
+
+```yaml
+services:
+  bubo-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_AI_DEPS: 0
+    container_name: bubo-web
+    environment:
+      BUBO_WEB_PORT: 7654
+      BUBO_WEB_AUTH_ENABLED: 1
+      BUBO_WEB_USER: admin
+      BUBO_WEB_PASSWORD: "change-me"
+      BUBO_WEB_SECRET: "change-this-secret"
+      BUBO_UNIVERSE_FILE: data/universe_global_v1.txt
+      BUBO_PRESELECT_TOP: 60
+      BUBO_MAX_DEEP: 20
+      BUBO_PAPER_ENABLED: 1
+      BUBO_NO_FINBERT: 1
+    ports:
+      - "7654:7654"
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    command: ["python", "web_app.py", "--host", "0.0.0.0", "--port", "7654"]
+    restart: unless-stopped
+```
+
+Exemple NAS en pull d'image GHCR:
+
+```yaml
+services:
+  bubo-web:
+    image: ghcr.io/zevlek/bubo-trading:latest
+    container_name: bubo-web
+    environment:
+      BUBO_WEB_PORT: 7654
+      BUBO_WEB_AUTH_ENABLED: 1
+      BUBO_WEB_USER: admin
+      BUBO_WEB_PASSWORD: "change-me"
+      BUBO_WEB_SECRET: "change-this-secret"
+    ports:
+      - "7654:7654"
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    command: ["python", "web_app.py", "--host", "0.0.0.0", "--port", "7654"]
+    restart: unless-stopped
+```
