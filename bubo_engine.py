@@ -134,6 +134,7 @@ class EngineConfig:
     backtest_period_years: int = 2
     watch_interval_min: int = 15
     use_finbert: bool = True
+    decision_engine: str = "llm"  # llm | rules
     paper_broker: str = "local"  # local | ibkr
     ibkr_host: str = "127.0.0.1"
     ibkr_port: int = 7497
@@ -157,6 +158,11 @@ def get_adaptive_weights(cfg: EngineConfig) -> dict:
     return {k: v / total for k, v in raw.items()}
 
 
+def _normalize_decision_engine(value: str) -> str:
+    eng = str(value or "llm").strip().lower()
+    return eng if eng in {"llm", "rules"} else "llm"
+
+
 # ─────────────────────────────────────────────
 # Scoring Engine
 # ─────────────────────────────────────────────
@@ -166,14 +172,19 @@ class ScoringEngine:
 
     def __init__(self, cfg: EngineConfig):
         self.cfg = cfg
+        self.cfg.decision_engine = _normalize_decision_engine(self.cfg.decision_engine)
         self.weights = get_adaptive_weights(cfg)
         self._event_tickers_sig = None
+        self.llm_collector = None
+        self.llm_brain = None
+        self.llm_ready = False
 
         print(f"\n🦉 BUBO Engine — Modules actifs:")
         for name, active in MODULES.items():
             print(f"  {'✅' if active else '⚠️ '} {name}")
         active_w = {k: v for k, v in self.weights.items() if v > 0}
         print(f"  Poids: {' | '.join(f'{k}={v:.0%}' for k, v in active_w.items())}")
+        print(f"  Decision Engine: {self.cfg.decision_engine}")
 
         # Init modules
         self.tech_config = TradingConfig() if MODULES["phase1"] else None
@@ -212,8 +223,50 @@ class ScoringEngine:
                 print(f"  ⚠️  Social init: {e}")
                 MODULES["phase3b"] = False
 
+        if self.cfg.decision_engine == "llm":
+            self._init_llm_engine()
+
         # Recalculate weights after potential module failures
         self.weights = get_adaptive_weights(cfg)
+
+    def _init_llm_engine(self):
+        try:
+            from bubo_brain import DataCollector, GeminiBrain, load_gemini_key
+        except Exception as e:
+            print(f"  ⚠️  LLM init: bubo_brain indisponible ({e}) — fallback rules")
+            self.llm_ready = False
+            return
+
+        try:
+            api_key = load_gemini_key()
+        except Exception as e:
+            print(f"  ⚠️  LLM init: key Gemini introuvable ({e}) — fallback rules")
+            self.llm_ready = False
+            return
+
+        if not api_key:
+            print("  ⚠️  LLM init: GEMINI_API_KEY manquante — fallback rules")
+            self.llm_ready = False
+            return
+
+        try:
+            collector = DataCollector(use_finbert=self.cfg.use_finbert)
+            collector.init_events(self.cfg.tickers)
+            if self.cfg.use_finbert:
+                collector.init_sentiment()
+            collector.init_social()
+            brain = GeminiBrain(api_key)
+            if getattr(brain, "client", None) is None:
+                print("  ⚠️  LLM init: client Gemini indisponible — fallback rules")
+                self.llm_ready = False
+                return
+            self.llm_collector = collector
+            self.llm_brain = brain
+            self.llm_ready = True
+            print("  ✅ LLM decision active (Gemini)")
+        except Exception as e:
+            print(f"  ⚠️  LLM init: {e} — fallback rules")
+            self.llm_ready = False
 
     def set_tickers(self, tickers: list):
         """
@@ -230,7 +283,14 @@ class ScoringEngine:
 
         self.cfg.tickers = cleaned
 
+        llm_collector = getattr(self, "llm_collector", None)
+
         if not MODULES.get("phase2a"):
+            if llm_collector is not None and hasattr(llm_collector, "init_events"):
+                try:
+                    llm_collector.init_events(cleaned)
+                except Exception:
+                    pass
             return
 
         new_sig = tuple(sorted(cleaned))
@@ -241,6 +301,66 @@ class ScoringEngine:
         self.event_calendar.load_all()
         self.event_filter = EventFilter(self.event_calendar)
         self._event_tickers_sig = new_sig
+        if llm_collector is not None and hasattr(llm_collector, "init_events"):
+            try:
+                llm_collector.init_events(cleaned)
+            except Exception:
+                pass
+
+    def _score_llm(self, ticker: str) -> dict:
+        if not self.llm_ready or self.llm_collector is None or self.llm_brain is None:
+            raise RuntimeError("LLM engine not ready")
+
+        data = self.llm_collector.collect(ticker)
+        llm = self.llm_brain.analyze(data, dry_run=False)
+        decision = str(llm.get("decision", "HOLD")).strip().upper()
+        if decision not in {"BUY", "STRONG BUY", "SELL", "STRONG SELL", "HOLD"}:
+            decision = "HOLD"
+
+        score = float(llm.get("score", 50.0) or 50.0)
+        score = max(0.0, min(100.0, score))
+        confidence = float(llm.get("confidence", 0.0) or 0.0)
+        confidence = max(0.0, min(100.0, confidence))
+
+        position = float(llm.get("position_size_pct", 0.0) or 0.0)
+        if decision in {"BUY", "STRONG BUY"}:
+            position = max(self.cfg.min_position_pct, min(self.cfg.max_position_pct, position))
+        else:
+            position = 0.0
+
+        reasons = []
+        warnings_list = []
+
+        reasoning = str(llm.get("raisonnement", "") or "").strip()
+        if reasoning:
+            reasons.append(f"LLM: {reasoning}")
+
+        for sig in (llm.get("signaux_cles", []) or [])[:4]:
+            s = str(sig).strip()
+            if s:
+                reasons.append(f"LLM signal: {s}")
+
+        for rk in (llm.get("risques", []) or [])[:4]:
+            s = str(rk).strip()
+            if s:
+                warnings_list.append(f"LLM risk: {s}")
+
+        events = data.get("events", {}) if isinstance(data, dict) else {}
+        if isinstance(events, dict) and events.get("blackout_actif"):
+            decision = "HOLD"
+            position = 0.0
+            blackout_reason = str(events.get("blackout_raison", "")).strip()
+            if blackout_reason:
+                warnings_list.append(f"Event blackout: {blackout_reason}")
+
+        return {
+            "score": round(score, 1),
+            "decision": decision,
+            "confidence": round(confidence, 1),
+            "position_size_pct": round(position, 3),
+            "reasons": reasons,
+            "warnings": warnings_list,
+        }
 
     def score_ticker(self, ticker: str) -> dict:
         """Score unifiÃ© pour un ticker. Retourne dict complet."""
@@ -256,6 +376,20 @@ class ScoringEngine:
             "reasons": [],
             "warnings": [],
         }
+
+        if self.cfg.decision_engine == "llm":
+            try:
+                llm = self._score_llm(ticker)
+                result["scores"]["llm"] = llm["score"]
+                result["final_score"] = llm["score"]
+                result["decision"] = llm["decision"]
+                result["confidence"] = llm["confidence"]
+                result["position_size_pct"] = llm["position_size_pct"]
+                result["reasons"].extend(llm.get("reasons", []))
+                result["warnings"].extend(llm.get("warnings", []))
+                return result
+            except Exception as e:
+                result["warnings"].append(f"LLM fallback rules: {e}")
 
         # â”€â”€ Phase 1: Technique â”€â”€
         if MODULES.get("phase1"):
@@ -1924,6 +2058,8 @@ def main():
                         help="Reinitialise l'etat paper trading avant execution")
     parser.add_argument("--paper-webhook", type=str, default="",
                         help="Webhook URL pour alertes paper (Discord/Slack)")
+    parser.add_argument("--decision-engine", type=str, default=os.getenv("BUBO_DECISION_ENGINE", "llm"),
+                        help="Decision engine: llm|rules")
     parser.add_argument("--paper-broker", type=str, default=os.getenv("BUBO_PAPER_BROKER", "local"),
                         help="Broker paper: local|ibkr")
     parser.add_argument("--ibkr-host", type=str, default=os.getenv("BUBO_IBKR_HOST", "127.0.0.1"),
@@ -1960,6 +2096,7 @@ def main():
     cfg = EngineConfig()
     cfg.initial_capital = args.capital
     cfg.use_finbert = not args.no_finbert
+    cfg.decision_engine = _normalize_decision_engine(args.decision_engine)
     cfg.paper_broker = _normalize_paper_broker(args.paper_broker)
     cfg.ibkr_host = str(args.ibkr_host).strip() or "127.0.0.1"
     cfg.ibkr_port = int(args.ibkr_port)

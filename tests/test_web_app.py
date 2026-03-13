@@ -19,6 +19,7 @@ class WebAppTests(unittest.TestCase):
                 "preselect_top": 70,
                 "max_deep": 25,
                 "capital": 15000,
+                "decision_engine": "llm",
                 "paper_enabled": True,
                 "paper_state": "data/custom_state.json",
                 "paper_webhook": "https://example.invalid/webhook",
@@ -37,6 +38,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("25", cmd)
         self.assertIn("--capital", cmd)
         self.assertIn("15000.0", cmd)
+        self.assertIn("--decision-engine", cmd)
+        self.assertIn("llm", cmd)
         self.assertIn("--paper", cmd)
         self.assertIn("--paper-state", cmd)
         self.assertIn("data/custom_state.json", cmd)
@@ -60,6 +63,7 @@ class WebAppTests(unittest.TestCase):
                 "universe_file": "data/universe_global_v1.txt",
                 "preselect_top": 10,
                 "max_deep": 5,
+                "decision_engine": "rules",
                 "paper_enabled": False,
                 "no_finbert": False,
                 "paper_webhook": "",
@@ -77,6 +81,8 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("--paper", cmd)
         self.assertNotIn("--no-finbert", cmd)
         self.assertNotIn("--paper-webhook", cmd)
+        self.assertIn("--decision-engine", cmd)
+        self.assertIn("rules", cmd)
         self.assertIn("--paper-broker", cmd)
         self.assertIn("ibkr", cmd)
         self.assertIn("--ibkr-account", cmd)

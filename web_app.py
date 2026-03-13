@@ -100,6 +100,7 @@ def _coerce_float(value: Any, default: float, minimum: float | None = None) -> f
 
 def get_default_config() -> dict[str, Any]:
     return {
+        "decision_engine": os.getenv("BUBO_DECISION_ENGINE", "llm"),
         "universe_file": os.getenv("BUBO_UNIVERSE_FILE", "data/universe_global_v1.txt"),
         "preselect_top": _coerce_int(os.getenv("BUBO_PRESELECT_TOP", "60"), 60, minimum=1),
         "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "20"), 20, minimum=1),
@@ -125,6 +126,8 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
 
     if "universe_file" in payload:
         cfg["universe_file"] = str(payload.get("universe_file") or "").strip()
+    if "decision_engine" in payload:
+        cfg["decision_engine"] = str(payload.get("decision_engine") or "").strip().lower()
     if "paper_state" in payload:
         cfg["paper_state"] = str(payload.get("paper_state") or "").strip()
     if "paper_webhook" in payload:
@@ -148,6 +151,8 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["paper_enabled"] = _coerce_bool(payload.get("paper_enabled"), cfg["paper_enabled"])
     cfg["no_finbert"] = _coerce_bool(payload.get("no_finbert"), cfg["no_finbert"])
     cfg["no_budget_gate"] = _coerce_bool(payload.get("no_budget_gate"), cfg["no_budget_gate"])
+    if cfg["decision_engine"] not in {"llm", "rules"}:
+        cfg["decision_engine"] = "llm"
     if cfg["paper_broker"] not in {"local", "ibkr"}:
         cfg["paper_broker"] = "local"
     return cfg
@@ -169,6 +174,8 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.extend(["--universe-file", cfg["universe_file"]])
         cmd.extend(["--preselect-top", str(cfg["preselect_top"])])
         cmd.extend(["--max-deep", str(cfg["max_deep"])])
+
+    cmd.extend(["--decision-engine", str(cfg["decision_engine"])])
 
     if cfg["no_budget_gate"]:
         cmd.append("--no-budget-gate")

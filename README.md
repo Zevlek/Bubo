@@ -68,6 +68,7 @@ services:
       BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
       BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
       BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
@@ -121,6 +122,7 @@ services:
       BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
       BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
       BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
@@ -194,6 +196,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_WEB_PASSWORD` | Mot de passe login UI | Requis si auth active (fortement recommande) | Texte libre | `change-me` |
 | `BUBO_WEB_SECRET` | Secret de session Flask | Requis en production | Chaine longue aleatoire | `change-this-secret` |
 | `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_global_v1.txt`) | `data/universe_global_v1.txt` |
+| `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
 | `BUBO_PRESELECT_TOP` | Taille shortlist apres prescan | Non | Entier `>= 1` | `60` |
 | `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `20` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
@@ -220,6 +223,7 @@ Notes compatibilite:
 - Le code accepte aussi `NEWSAPI_KEY` en alternative a `BUBO_NEWSAPI_KEY`.
 - Le code accepte aussi `FINNHUB_KEY` en alternative a `BUBO_FINNHUB_KEY`.
 - Le code accepte aussi `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `REDDIT_USER_AGENT` en alternatives aux variables `BUBO_*`.
+- Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur bascule en fallback `rules`.
 
 ## Test paper trading IBKR
 
