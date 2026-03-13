@@ -94,8 +94,8 @@ services:
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
       BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
-      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-127.0.0.1}
-      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-7497}
+      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-ib-gateway}
+      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-4004}
       BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
       BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
       BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
@@ -119,6 +119,29 @@ services:
       - 0.0.0.0
       - --port
       - "7654"
+    restart: unless-stopped
+
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: bubo-ib-gateway
+    profiles: ["ibkr"]
+    environment:
+      TWS_USERID: ${IBG_TWS_USERID:-}
+      TWS_PASSWORD: ${IBG_TWS_PASSWORD:-}
+      TRADING_MODE: ${IBG_TRADING_MODE:-paper}
+      READ_ONLY_API: ${IBG_READ_ONLY_API:-no}
+      TWS_ACCEPT_INCOMING: ${IBG_TWS_ACCEPT_INCOMING:-accept}
+      TWOFA_TIMEOUT_ACTION: ${IBG_TWOFA_TIMEOUT_ACTION:-restart}
+      TIME_ZONE: ${TZ:-Europe/Paris}
+      TZ: ${TZ:-Europe/Paris}
+      VNC_SERVER_PASSWORD: ${IBG_VNC_SERVER_PASSWORD:-}
+      JAVA_HEAP_SIZE: ${IBG_JAVA_HEAP_SIZE:-}
+    volumes:
+      - ./ibgateway-data:/home/ibgateway/Jts
+    ports:
+      - "127.0.0.1:${IBG_HOST_PAPER_PORT:-4002}:4004"
+      - "127.0.0.1:${IBG_HOST_LIVE_PORT:-4001}:4003"
+      - "127.0.0.1:${IBG_HOST_VNC_PORT:-5900}:5900"
     restart: unless-stopped
 ```
 
@@ -148,8 +171,8 @@ services:
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
       BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
-      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-127.0.0.1}
-      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-7497}
+      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-ib-gateway}
+      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-4004}
       BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
       BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
       BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
@@ -173,6 +196,29 @@ services:
       - 0.0.0.0
       - --port
       - "7654"
+    restart: unless-stopped
+
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: bubo-ib-gateway
+    profiles: ["ibkr"]
+    environment:
+      TWS_USERID: ${IBG_TWS_USERID:-}
+      TWS_PASSWORD: ${IBG_TWS_PASSWORD:-}
+      TRADING_MODE: ${IBG_TRADING_MODE:-paper}
+      READ_ONLY_API: ${IBG_READ_ONLY_API:-no}
+      TWS_ACCEPT_INCOMING: ${IBG_TWS_ACCEPT_INCOMING:-accept}
+      TWOFA_TIMEOUT_ACTION: ${IBG_TWOFA_TIMEOUT_ACTION:-restart}
+      TIME_ZONE: ${TZ:-Europe/Paris}
+      TZ: ${TZ:-Europe/Paris}
+      VNC_SERVER_PASSWORD: ${IBG_VNC_SERVER_PASSWORD:-}
+      JAVA_HEAP_SIZE: ${IBG_JAVA_HEAP_SIZE:-}
+    volumes:
+      - ./ibgateway-data:/home/ibgateway/Jts
+    ports:
+      - "127.0.0.1:${IBG_HOST_PAPER_PORT:-4002}:4004"
+      - "127.0.0.1:${IBG_HOST_LIVE_PORT:-4001}:4003"
+      - "127.0.0.1:${IBG_HOST_VNC_PORT:-5900}:5900"
     restart: unless-stopped
 
   watchtower:
@@ -221,12 +267,23 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
 | `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |
 | `BUBO_PAPER_BROKER` | Moteur paper: local ou ordres paper IBKR | Non | `local` ou `ibkr` | `local` |
-| `BUBO_IBKR_HOST` | Host TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `127.0.0.1` | `127.0.0.1` |
-| `BUBO_IBKR_PORT` | Port TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `7497` (paper) | `7497` |
+| `BUBO_IBKR_HOST` | Host TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `ib-gateway`, `192.168.x.x` | `ib-gateway` |
+| `BUBO_IBKR_PORT` | Port TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `4004` (ib-gateway), `7497` (TWS) | `4004` |
 | `BUBO_IBKR_CLIENT_ID` | Client id IB API | Non (utile si broker=`ibkr`) | Entier `>= 1` | `42` |
 | `BUBO_IBKR_ACCOUNT` | Compte paper IBKR (optionnel) | Non | Ex: `DUXXXXXX` | vide |
 | `BUBO_IBKR_EXCHANGE` | Routing exchange IBKR | Non (utile si broker=`ibkr`) | Ex: `SMART` | `SMART` |
 | `BUBO_IBKR_CURRENCY` | Devise contrat actions | Non (utile si broker=`ibkr`) | Ex: `USD`, `EUR` | `USD` |
+| `IBG_TWS_USERID` | Login IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Identifiant IBKR | vide |
+| `IBG_TWS_PASSWORD` | Mot de passe IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Mot de passe IBKR | vide |
+| `IBG_TRADING_MODE` | Mode IB Gateway | Non | `paper`, `live`, `both` | `paper` |
+| `IBG_READ_ONLY_API` | API IB read-only | Non | `yes` ou `no` | `no` |
+| `IBG_TWS_ACCEPT_INCOMING` | Accepte connexions API entrantes | Non | `accept`, `reject`, `manual` | `accept` |
+| `IBG_TWOFA_TIMEOUT_ACTION` | Action si 2FA timeout | Non | `restart` ou `exit` | `restart` |
+| `IBG_VNC_SERVER_PASSWORD` | Mot de passe VNC ib-gateway | Non | Texte libre | vide |
+| `IBG_JAVA_HEAP_SIZE` | Memoire Java IB Gateway (MB) | Non | Entier (ex: `1024`) | vide |
+| `IBG_HOST_PAPER_PORT` | Port host mappe vers paper API container | Non | Port TCP (ex: `4002`) | `4002` |
+| `IBG_HOST_LIVE_PORT` | Port host mappe vers live API container | Non | Port TCP (ex: `4001`) | `4001` |
+| `IBG_HOST_VNC_PORT` | Port host mappe vers VNC container | Non | Port TCP (ex: `5900`) | `5900` |
 | `BUBO_NO_FINBERT` | Desactive FinBERT si `1` | Non | `0` (actif) ou `1` (desactive) | `1` |
 | `BUBO_NO_BUDGET_GATE` | Desactive gate budget API si `1` | Non | `0` ou `1` | `0` |
 | `GEMINI_API_KEY` | Cle Gemini pour `bubo_brain.py` | Non (requise seulement si feature utilisee) | Cle API Google Gemini ou vide | vide |
@@ -244,31 +301,32 @@ Notes compatibilite:
 
 ## Test paper trading IBKR
 
-1. Activer l'API dans TWS/IB Gateway paper:
-- `Enable ActiveX and Socket Clients`
-- autoriser `127.0.0.1`
-- port paper (souvent `7497`)
-
-2. Configurer `.env`:
+1. Configurer `.env`:
 
 ```env
 BUBO_PAPER_BROKER=ibkr
-BUBO_IBKR_HOST=127.0.0.1
-BUBO_IBKR_PORT=7497
+BUBO_IBKR_HOST=ib-gateway
+BUBO_IBKR_PORT=4004
 BUBO_IBKR_CLIENT_ID=42
 BUBO_IBKR_ACCOUNT=DUXXXXXX
 BUBO_IBKR_EXCHANGE=SMART
 BUBO_IBKR_CURRENCY=USD
+IBG_TWS_USERID=ton_login_ibkr
+IBG_TWS_PASSWORD=ton_password_ibkr
+IBG_TRADING_MODE=paper
 ```
 
-3. Installer deps IA (inclut `ib_insync`) puis lancer:
+2. Lancer avec profile `ibkr`:
 
 ```bash
 INSTALL_AI_DEPS=1 docker compose build
-docker compose up -d
+docker compose --profile ibkr up -d
 ```
 
 Notes:
+- L'image `ib-gateway` est lancee en sidecar (meme network Docker que BUBO).
+- Si tu utilises `docker-compose.ghcr.yml`, fais `docker compose -f docker-compose.ghcr.yml --profile ibkr up -d`.
+- Si tu utilises TWS/IB Gateway externe (hors Docker), garde `BUBO_PAPER_BROKER=ibkr` et remplace `BUBO_IBKR_HOST`/`BUBO_IBKR_PORT` par l'hote/port reel.
 - si la connexion IBKR echoue, BUBO bascule automatiquement en mode `local` pour ne pas bloquer le cycle.
 - en mode `ibkr`, les commissions/fills sont pris depuis les retours d'ordre paper IBKR quand disponibles.
 

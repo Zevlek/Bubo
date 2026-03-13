@@ -21,8 +21,8 @@ services:
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
       BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
-      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-127.0.0.1}
-      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-7497}
+      BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-ib-gateway}
+      BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-4004}
       BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
       BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
       BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
@@ -46,6 +46,29 @@ services:
       - 0.0.0.0
       - --port
       - "7654"
+    restart: unless-stopped
+
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: bubo-ib-gateway
+    profiles: ["ibkr"]
+    environment:
+      TWS_USERID: ${IBG_TWS_USERID:-}
+      TWS_PASSWORD: ${IBG_TWS_PASSWORD:-}
+      TRADING_MODE: ${IBG_TRADING_MODE:-paper}
+      READ_ONLY_API: ${IBG_READ_ONLY_API:-no}
+      TWS_ACCEPT_INCOMING: ${IBG_TWS_ACCEPT_INCOMING:-accept}
+      TWOFA_TIMEOUT_ACTION: ${IBG_TWOFA_TIMEOUT_ACTION:-restart}
+      TIME_ZONE: ${TZ:-Europe/Paris}
+      TZ: ${TZ:-Europe/Paris}
+      VNC_SERVER_PASSWORD: ${IBG_VNC_SERVER_PASSWORD:-}
+      JAVA_HEAP_SIZE: ${IBG_JAVA_HEAP_SIZE:-}
+    volumes:
+      - ./ibgateway-data:/home/ibgateway/Jts
+    ports:
+      - "127.0.0.1:${IBG_HOST_PAPER_PORT:-4002}:4004"
+      - "127.0.0.1:${IBG_HOST_LIVE_PORT:-4001}:4003"
+      - "127.0.0.1:${IBG_HOST_VNC_PORT:-5900}:5900"
     restart: unless-stopped
 
   watchtower:
