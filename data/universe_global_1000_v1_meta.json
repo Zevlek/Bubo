@@ -1,0 +1,39 @@
+{
+  "generated_at": "2026-03-13T22:00:27.519623+00:00",
+  "method": "Top holdings from IVV(500)+IJH(300)+IJR(180) + 20 international/defense, then weighted fill to 1000",
+  "selected_count": 1000,
+  "sources": {
+    "IVV": "https://www.ishares.com/us/products/239726/ishares-core-sp-500-etf/1467271812596.ajax?fileType=csv&fileName=IVV_holdings&dataType=fund",
+    "IJH": "https://www.ishares.com/us/products/239763/ishares-core-sp-mid-cap-etf/1467271812596.ajax?fileType=csv&fileName=IJH_holdings&dataType=fund",
+    "IJR": "https://www.ishares.com/us/products/239774/ishares-core-sp-smallcap-etf/1467271812596.ajax?fileType=csv&fileName=IJR_holdings&dataType=fund"
+  },
+  "quotas": {
+    "IVV": 500,
+    "IJH": 300,
+    "IJR": 180,
+    "INTL": 20
+  },
+  "international_overlay": [
+    "AIR.PA",
+    "AM.PA",
+    "HO.PA",
+    "SAF.PA",
+    "LDO.MI",
+    "RR.L",
+    "QINETIQ.L",
+    "RHM.DE",
+    "MTX.DE",
+    "HAG.DE",
+    "ASML",
+    "NVO",
+    "SIE.DE",
+    "BAYN.DE",
+    "NESN.SW",
+    "NOVN.SW",
+    "SHEL",
+    "BP",
+    "TTE",
+    "ENI.MI"
+  ],
+  "file": "data\\universe_global_1000_v1.txt"
+}

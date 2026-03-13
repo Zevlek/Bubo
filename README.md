@@ -44,6 +44,23 @@ docker compose build
 docker compose up -d
 ```
 
+## Universe 1000 (pret a l'emploi)
+
+Un univers large preconstruit est disponible:
+- `data/universe_global_1000_v1.txt` (1000 tickers)
+
+Pour l'activer:
+
+```env
+BUBO_UNIVERSE_FILE=data/universe_global_1000_v1.txt
+```
+
+L'univers 1000 est pense pour fonctionner avec l'entonnoir du moteur:
+- prescreen large univers,
+- shortlist `BUBO_PRESELECT_TOP`,
+- deep analysis `BUBO_MAX_DEEP`,
+- budget gate API actif par defaut.
+
 ## Exemples docker-compose (qui marchent)
 
 ### Exemple A: build local (`docker-compose.yml`)
