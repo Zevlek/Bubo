@@ -2,5 +2,3 @@ transformers>=4.41
 torch>=2.2
 sentencepiece>=0.1.99
 praw>=7.7
-google-genai>=0.3
-ib_insync>=0.9.86

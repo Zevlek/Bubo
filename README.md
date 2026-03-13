@@ -251,7 +251,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | Variable | Utilite | Obligatoire | Valeurs possibles | Defaut |
 | --- | --- | --- | --- | --- |
 | `TZ` | Fuseau horaire du container | Non | Ex: `Europe/Paris`, `UTC` | `Europe/Paris` |
-| `INSTALL_AI_DEPS` | Installe les deps IA optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers/praw/google-genai) | `0` |
+| `INSTALL_AI_DEPS` | Installe les deps IA lourdes optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers/praw) | `0` |
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
 | `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
 | `BUBO_WEB_AUTH_ENABLED` | Active le login UI | Non | `0` ou `1` | `1` |
@@ -319,12 +319,14 @@ IBG_TRADING_MODE=paper
 2. Lancer avec profile `ibkr`:
 
 ```bash
-INSTALL_AI_DEPS=1 docker compose build
+docker compose build
 docker compose --profile ibkr up -d
 ```
 
 Notes:
 - L'image `ib-gateway` est lancee en sidecar (meme network Docker que BUBO).
+- `ib_insync` et `google-genai` sont installes par defaut dans l'image (pas besoin de `INSTALL_AI_DEPS=1` pour IBKR/LLM).
+- Active `INSTALL_AI_DEPS=1` seulement si tu veux les modules lourds (`torch`/`transformers`) et `praw`.
 - Si tu utilises `docker-compose.ghcr.yml`, fais `docker compose -f docker-compose.ghcr.yml --profile ibkr up -d`.
 - Si tu utilises TWS/IB Gateway externe (hors Docker), garde `BUBO_PAPER_BROKER=ibkr` et remplace `BUBO_IBKR_HOST`/`BUBO_IBKR_PORT` par l'hote/port reel.
 - si la connexion IBKR echoue, BUBO bascule automatiquement en mode `local` pour ne pas bloquer le cycle.
