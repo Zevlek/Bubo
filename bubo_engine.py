@@ -233,19 +233,19 @@ class ScoringEngine:
         try:
             from bubo_brain import DataCollector, GeminiBrain, load_gemini_key
         except Exception as e:
-            print(f"  ⚠️  LLM init: bubo_brain indisponible ({e}) — fallback rules")
+            print(f"  ⚠️  LLM init: bubo_brain indisponible ({e}) — NO_DECISION")
             self.llm_ready = False
             return
 
         try:
             api_key = load_gemini_key()
         except Exception as e:
-            print(f"  ⚠️  LLM init: key Gemini introuvable ({e}) — fallback rules")
+            print(f"  ⚠️  LLM init: key Gemini introuvable ({e}) — NO_DECISION")
             self.llm_ready = False
             return
 
         if not api_key:
-            print("  ⚠️  LLM init: GEMINI_API_KEY manquante — fallback rules")
+            print("  ⚠️  LLM init: GEMINI_API_KEY manquante — NO_DECISION")
             self.llm_ready = False
             return
 
@@ -257,7 +257,7 @@ class ScoringEngine:
             collector.init_social()
             brain = GeminiBrain(api_key)
             if getattr(brain, "client", None) is None:
-                print("  ⚠️  LLM init: client Gemini indisponible — fallback rules")
+                print("  ⚠️  LLM init: client Gemini indisponible — NO_DECISION")
                 self.llm_ready = False
                 return
             self.llm_collector = collector
@@ -265,7 +265,7 @@ class ScoringEngine:
             self.llm_ready = True
             print("  ✅ LLM decision active (Gemini)")
         except Exception as e:
-            print(f"  ⚠️  LLM init: {e} — fallback rules")
+            print(f"  ⚠️  LLM init: {e} — NO_DECISION")
             self.llm_ready = False
 
     def set_tickers(self, tickers: list):
@@ -389,7 +389,13 @@ class ScoringEngine:
                 result["warnings"].extend(llm.get("warnings", []))
                 return result
             except Exception as e:
-                result["warnings"].append(f"LLM fallback rules: {e}")
+                result["scores"]["llm"] = 50.0
+                result["final_score"] = 50.0
+                result["decision"] = "NO_DECISION"
+                result["confidence"] = 0.0
+                result["position_size_pct"] = 0.0
+                result["warnings"].append(f"LLM unavailable: {e}")
+                return result
 
         # â”€â”€ Phase 1: Technique â”€â”€
         if MODULES.get("phase1"):

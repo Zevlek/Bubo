@@ -39,6 +39,7 @@ class CriticalRulesTests(unittest.TestCase):
 
             engine = ScoringEngine.__new__(ScoringEngine)
             engine.cfg = EngineConfig()
+            engine.cfg.decision_engine = "rules"
             engine.weights = {"technical": 1.0, "news": 0.0, "social": 0.0, "events": 0.0}
             engine.sentiment_engine = None
             engine.social_pipeline = None
@@ -68,6 +69,7 @@ class CriticalRulesTests(unittest.TestCase):
 
             engine = ScoringEngine.__new__(ScoringEngine)
             engine.cfg = EngineConfig()
+            engine.cfg.decision_engine = "rules"
             engine.weights = {"technical": 1.0, "news": 0.0, "social": 0.0, "events": 0.0}
             engine.sentiment_engine = None
             engine.social_pipeline = None
@@ -82,6 +84,27 @@ class CriticalRulesTests(unittest.TestCase):
 
             result = ScoringEngine.score_ticker(engine, "RTX")
             self.assertIn(result["decision"], ("SELL", "STRONG SELL"))
+            self.assertEqual(result["position_size_pct"], 0.0)
+        finally:
+            bubo_engine.MODULES.clear()
+            bubo_engine.MODULES.update(saved_modules)
+
+    def test_llm_mode_no_fallback_returns_no_decision(self):
+        saved_modules = bubo_engine.MODULES.copy()
+        try:
+            bubo_engine.MODULES.clear()
+            bubo_engine.MODULES.update(
+                {"phase1": True, "phase2a": False, "phase2b": False, "phase3b": False}
+            )
+
+            engine = ScoringEngine.__new__(ScoringEngine)
+            engine.cfg = EngineConfig()
+            engine.cfg.decision_engine = "llm"
+            engine.weights = {"technical": 1.0, "news": 0.0, "social": 0.0, "events": 0.0}
+            engine._score_technical = lambda _: (_ for _ in ()).throw(RuntimeError("should not be called"))  # type: ignore[attr-defined]
+
+            result = ScoringEngine.score_ticker(engine, "RTX")
+            self.assertEqual(result["decision"], "NO_DECISION")
             self.assertEqual(result["position_size_pct"], 0.0)
         finally:
             bubo_engine.MODULES.clear()
