@@ -451,13 +451,13 @@
         <div class="connectivity">
           <div class="toolbar" style="margin-bottom: 0;">
             <h2 style="margin: 0; font-size: 0.92rem;">Connectivite API</h2>
-            <small id="conn-meta">Chargement...</small>
+            <small id="conn-meta">A la demande (manuel)</small>
           </div>
           <div id="connectivity-list" class="connectivity-list">
             <div class="conn-item">
               <div class="conn-main">
                 <div class="conn-label">Diagnostic</div>
-                <div class="conn-msg">Initialisation...</div>
+                <div class="conn-msg">Clique sur "Tester maintenant" pour lancer un check.</div>
               </div>
               <span class="badge disabled">N/A</span>
             </div>
@@ -501,15 +501,12 @@
 
         <div class="row-2">
           <div>
-            <label class="label" for="paper_broker">Paper broker</label>
-            <select id="paper_broker" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
-              <option value="local" {% if defaults.paper_broker == "local" %}selected{% endif %}>local</option>
-              <option value="ibkr" {% if defaults.paper_broker == "ibkr" %}selected{% endif %}>ibkr</option>
-            </select>
-          </div>
-          <div>
             <label class="label" for="ibkr_account">IBKR account (opt.)</label>
             <input id="ibkr_account" type="text" value="{{ defaults.ibkr_account }}">
+          </div>
+          <div>
+            <label class="label" for="ibkr_capital_limit">Capital gere sur IBKR</label>
+            <input id="ibkr_capital_limit" type="number" min="1" step="100" value="{{ defaults.ibkr_capital_limit }}">
           </div>
         </div>
 
@@ -537,6 +534,12 @@
 
         <label class="label" for="ibkr_currency">IBKR currency</label>
         <input id="ibkr_currency" type="text" value="{{ defaults.ibkr_currency }}">
+
+        <label class="label" for="ibkr_existing_positions_policy">Positions deja ouvertes sur IBKR</label>
+        <select id="ibkr_existing_positions_policy" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
+          <option value="include" {% if defaults.ibkr_existing_positions_policy == "include" %}selected{% endif %}>include (les integrer et les gerer)</option>
+          <option value="ignore" {% if defaults.ibkr_existing_positions_policy == "ignore" %}selected{% endif %}>ignore (ne gerer que les nouvelles positions BUBO)</option>
+        </select>
 
         <div class="checks">
           <label><input id="paper_enabled" type="checkbox" {% if defaults.paper_enabled %}checked{% endif %}> Activer paper trading</label>
@@ -576,7 +579,7 @@
       </div>
       <div class="portfolio-grid">
         <div class="subcard">
-          <h3>Paper (BUBO)</h3>
+          <h3>Allocation BUBO (pilotage IBKR)</h3>
           <div id="paper-kpis">
             <div class="kpi">Chargement...</div>
           </div>
@@ -701,8 +704,8 @@
     const ibkrKpisEl = document.getElementById("ibkr-kpis");
     const ibkrPosBodyEl = document.getElementById("ibkr-pos-body");
     const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
-    let lastConnectivityRefreshEpoch = 0;
     let lastPortfolioRefreshEpoch = 0;
+    const PORTFOLIO_AUTO_REFRESH_MS = 60000;
 
     function configPayload() {
       return {
@@ -713,13 +716,15 @@
         capital: Number(document.getElementById("capital").value || 10000),
         paper_state: document.getElementById("paper_state").value.trim(),
         paper_webhook: document.getElementById("paper_webhook").value.trim(),
-        paper_broker: document.getElementById("paper_broker").value,
+        paper_broker: "ibkr",
         ibkr_host: document.getElementById("ibkr_host").value.trim(),
         ibkr_port: Number(document.getElementById("ibkr_port").value || 7497),
         ibkr_client_id: Number(document.getElementById("ibkr_client_id").value || 42),
         ibkr_account: document.getElementById("ibkr_account").value.trim(),
         ibkr_exchange: document.getElementById("ibkr_exchange").value.trim(),
         ibkr_currency: document.getElementById("ibkr_currency").value.trim(),
+        ibkr_capital_limit: Number(document.getElementById("ibkr_capital_limit").value || 10000),
+        ibkr_existing_positions_policy: document.getElementById("ibkr_existing_positions_policy").value,
         paper_enabled: document.getElementById("paper_enabled").checked,
         no_finbert: document.getElementById("no_finbert").checked,
         no_budget_gate: document.getElementById("no_budget_gate").checked
@@ -939,10 +944,11 @@
         const paper = data.paper || {};
         const ibkr = data.ibkr || {};
         const currency = (ibkr.currency || "USD");
+        const managedCapital = asNumber(paper.equity, 0);
 
         paperKpisEl.innerHTML = `
           <div class="kpi"><strong>Broker:</strong> ${escapeHtml(paper.broker || "n/a")}</div>
-          <div class="kpi"><strong>Equity:</strong> ${fmtMoney(paper.equity, currency)} | <strong>Cash:</strong> ${fmtMoney(paper.cash, currency)}</div>
+          <div class="kpi"><strong>Capital alloue:</strong> ${fmtMoney(managedCapital, currency)} | <strong>Cash dispo:</strong> ${fmtMoney(paper.cash, currency)}</div>
           <div class="kpi"><strong>Realized:</strong> ${fmtSigned(paper.realized_pnl)} | <strong>Positions:</strong> ${asNumber(paper.positions_count, 0)}</div>
           <div class="kpi"><strong>Closed trades:</strong> ${asNumber(paper.closed_trades_count, 0)} | <strong>Cycles:</strong> ${asNumber(paper.cycles, 0)}</div>
         `;
@@ -984,7 +990,7 @@
         }
 
         if (!ibkr.enabled) {
-          ibkrKpisEl.innerHTML = "<div class='kpi'>IBKR non actif (paper broker local).</div>";
+          ibkrKpisEl.innerHTML = "<div class='kpi'>IBKR non actif (paper trading desactive).</div>";
           ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>IBKR non actif.</td></tr>";
           ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>IBKR non actif.</td></tr>";
         } else if (!ibkr.ok) {
@@ -1035,22 +1041,17 @@
         }
 
         const mode = ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB live";
-        portfolioMetaEl.textContent = `${mode} | ${data.generated_at || ""}`;
+        const stale = ibkr.stale ? ` | stale (${String(ibkr.stale_reason || "refresh failed")})` : "";
+        portfolioMetaEl.textContent = `${mode}${stale} | ${data.generated_at || ""}`;
       } catch (err) {
-        portfolioMetaEl.textContent = "Erreur";
-        paperKpisEl.innerHTML = `<div class='kpi'><strong>Erreur:</strong> ${escapeHtml(err)}</div>`;
-        ibkrKpisEl.innerHTML = "<div class='kpi'>Snapshot indisponible.</div>";
+        portfolioMetaEl.textContent = `Erreur snapshot: ${escapeHtml(err)}`;
       }
     }
 
     async function refreshAll() {
       const tasks = [refreshStatus(), refreshLogs(), refreshFiles()];
       const now = Date.now();
-      if (now - lastConnectivityRefreshEpoch >= 15000) {
-        tasks.push(refreshConnectivity(false));
-        lastConnectivityRefreshEpoch = now;
-      }
-      if (now - lastPortfolioRefreshEpoch >= 15000) {
+      if (now - lastPortfolioRefreshEpoch >= PORTFOLIO_AUTO_REFRESH_MS) {
         tasks.push(refreshPortfolio(false));
         lastPortfolioRefreshEpoch = now;
       }

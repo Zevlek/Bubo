@@ -25,6 +25,8 @@ class WebAppTests(unittest.TestCase):
                 "paper_enabled": True,
                 "paper_state": "data/custom_state.json",
                 "paper_webhook": "https://example.invalid/webhook",
+                "ibkr_capital_limit": 12000,
+                "ibkr_existing_positions_policy": "ignore",
                 "no_finbert": True,
                 "no_budget_gate": True,
             },
@@ -48,12 +50,16 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("--paper-webhook", cmd)
         self.assertIn("https://example.invalid/webhook", cmd)
         self.assertIn("--paper-broker", cmd)
-        self.assertIn("local", cmd)
+        self.assertIn("ibkr", cmd)
         self.assertIn("--ibkr-host", cmd)
         self.assertIn("--ibkr-port", cmd)
         self.assertIn("--ibkr-client-id", cmd)
         self.assertIn("--ibkr-exchange", cmd)
         self.assertIn("--ibkr-currency", cmd)
+        self.assertIn("--ibkr-capital-limit", cmd)
+        self.assertIn("12000.0", cmd)
+        self.assertIn("--ibkr-existing-positions-policy", cmd)
+        self.assertIn("ignore", cmd)
         self.assertIn("--no-finbert", cmd)
         self.assertIn("--no-budget-gate", cmd)
         self.assertTrue(cfg["paper_enabled"])
@@ -76,6 +82,8 @@ class WebAppTests(unittest.TestCase):
                 "ibkr_account": "DU123",
                 "ibkr_exchange": "SMART",
                 "ibkr_currency": "USD",
+                "ibkr_capital_limit": 9000,
+                "ibkr_existing_positions_policy": "include",
             },
         )
         self.assertIn("--screen-only", cmd)
@@ -89,6 +97,10 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("ibkr", cmd)
         self.assertIn("--ibkr-account", cmd)
         self.assertIn("DU123", cmd)
+        self.assertIn("--ibkr-capital-limit", cmd)
+        self.assertIn("9000.0", cmd)
+        self.assertIn("--ibkr-existing-positions-policy", cmd)
+        self.assertIn("include", cmd)
 
     def test_invalid_mode_raises(self):
         with self.assertRaises(ValueError):

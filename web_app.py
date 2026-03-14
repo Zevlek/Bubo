@@ -68,15 +68,18 @@ _CONNECTIVITY_CACHE: dict[str, Any] = {
 }
 
 try:
-    BROKER_SNAPSHOT_CACHE_TTL_S = max(10, int(os.getenv("BUBO_BROKER_SNAPSHOT_CACHE_TTL_S", "20")))
+    BROKER_SNAPSHOT_CACHE_TTL_S = max(10, int(os.getenv("BUBO_BROKER_SNAPSHOT_CACHE_TTL_S", "60")))
 except Exception:
-    BROKER_SNAPSHOT_CACHE_TTL_S = 20
+    BROKER_SNAPSHOT_CACHE_TTL_S = 60
 
 _BROKER_CACHE_LOCK = threading.Lock()
 _BROKER_CACHE: dict[str, Any] = {
     "signature": "",
     "timestamp": 0.0,
     "report": None,
+    "last_ok_signature": "",
+    "last_ok_timestamp": 0.0,
+    "last_ok_report": None,
 }
 
 
@@ -468,6 +471,9 @@ def get_ibkr_snapshot(cfg: dict[str, Any], force: bool = False) -> dict[str, Any
         cached = _BROKER_CACHE.get("report")
         cached_sig = _BROKER_CACHE.get("signature")
         cached_ts = float(_BROKER_CACHE.get("timestamp") or 0.0)
+        last_ok = _BROKER_CACHE.get("last_ok_report")
+        last_ok_sig = _BROKER_CACHE.get("last_ok_signature")
+        last_ok_ts = float(_BROKER_CACHE.get("last_ok_timestamp") or 0.0)
         age_s = int(now - cached_ts) if cached_ts else 0
         cache_valid = (
             not force
@@ -483,6 +489,37 @@ def get_ibkr_snapshot(cfg: dict[str, Any], force: bool = False) -> dict[str, Any
         _BROKER_CACHE["signature"] = signature
         _BROKER_CACHE["timestamp"] = now
         _BROKER_CACHE["report"] = report
+        if bool(report.get("ok")):
+            _BROKER_CACHE["last_ok_signature"] = signature
+            _BROKER_CACHE["last_ok_timestamp"] = now
+            _BROKER_CACHE["last_ok_report"] = report
+        else:
+            last_ok = _BROKER_CACHE.get("last_ok_report")
+            last_ok_sig = _BROKER_CACHE.get("last_ok_signature")
+            last_ok_ts = float(_BROKER_CACHE.get("last_ok_timestamp") or 0.0)
+
+    if bool(report.get("ok")):
+        return {**report, "cached": False, "cache_age_s": 0, "ttl_s": BROKER_SNAPSHOT_CACHE_TTL_S}
+
+    # Keep last known-good IBKR snapshot to avoid UI "value disappearing" on transient failures.
+    if (
+        isinstance(last_ok, dict)
+        and last_ok
+        and str(last_ok_sig or "") == signature
+        and bool(report.get("enabled", True))
+    ):
+        stale_age = int(now - last_ok_ts) if last_ok_ts else 0
+        stale_reason = str(report.get("message", "") or "").strip() or "refresh failed"
+        return {
+            **last_ok,
+            "cached": True,
+            "cache_age_s": stale_age,
+            "ttl_s": BROKER_SNAPSHOT_CACHE_TTL_S,
+            "stale": True,
+            "stale_reason": stale_reason,
+            "message": f"Snapshot IBKR stale ({stale_reason})",
+        }
+
     return {**report, "cached": False, "cache_age_s": 0, "ttl_s": BROKER_SNAPSHOT_CACHE_TTL_S}
 
 
@@ -501,6 +538,8 @@ def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool 
             "ibkr_host": cfg.get("ibkr_host"),
             "ibkr_port": cfg.get("ibkr_port"),
             "ibkr_account": cfg.get("ibkr_account"),
+            "ibkr_capital_limit": cfg.get("ibkr_capital_limit"),
+            "ibkr_existing_positions_policy": cfg.get("ibkr_existing_positions_policy"),
         },
     }
 
@@ -952,13 +991,19 @@ def get_default_config() -> dict[str, Any]:
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),
         "paper_state": os.getenv("BUBO_PAPER_STATE", "data/paper_portfolio_state.json"),
         "paper_webhook": os.getenv("BUBO_PAPER_WEBHOOK", ""),
-        "paper_broker": os.getenv("BUBO_PAPER_BROKER", "local"),
+        "paper_broker": "ibkr",
         "ibkr_host": os.getenv("BUBO_IBKR_HOST", "127.0.0.1"),
         "ibkr_port": _coerce_int(os.getenv("BUBO_IBKR_PORT", "7497"), 7497, minimum=1),
         "ibkr_client_id": _coerce_int(os.getenv("BUBO_IBKR_CLIENT_ID", "42"), 42, minimum=1),
         "ibkr_account": os.getenv("BUBO_IBKR_ACCOUNT", ""),
         "ibkr_exchange": os.getenv("BUBO_IBKR_EXCHANGE", "SMART"),
         "ibkr_currency": os.getenv("BUBO_IBKR_CURRENCY", "USD"),
+        "ibkr_capital_limit": _coerce_float(
+            os.getenv("BUBO_IBKR_CAPITAL_LIMIT", os.getenv("BUBO_CAPITAL", "10000")),
+            10000.0,
+            minimum=1.0,
+        ),
+        "ibkr_existing_positions_policy": os.getenv("BUBO_IBKR_EXISTING_POSITIONS_POLICY", "include"),
         "no_finbert": _env_bool("BUBO_NO_FINBERT", True),
         "no_budget_gate": _env_bool("BUBO_NO_BUDGET_GATE", False),
     }
@@ -976,8 +1021,6 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg["paper_state"] = str(payload.get("paper_state") or "").strip()
     if "paper_webhook" in payload:
         cfg["paper_webhook"] = str(payload.get("paper_webhook") or "").strip()
-    if "paper_broker" in payload:
-        cfg["paper_broker"] = str(payload.get("paper_broker") or "").strip().lower()
     if "ibkr_host" in payload:
         cfg["ibkr_host"] = str(payload.get("ibkr_host") or "").strip()
     if "ibkr_account" in payload:
@@ -986,19 +1029,27 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg["ibkr_exchange"] = str(payload.get("ibkr_exchange") or "").strip().upper()
     if "ibkr_currency" in payload:
         cfg["ibkr_currency"] = str(payload.get("ibkr_currency") or "").strip().upper()
+    if "ibkr_existing_positions_policy" in payload:
+        cfg["ibkr_existing_positions_policy"] = str(payload.get("ibkr_existing_positions_policy") or "").strip().lower()
 
     cfg["preselect_top"] = _coerce_int(payload.get("preselect_top", cfg["preselect_top"]), cfg["preselect_top"], minimum=1)
     cfg["max_deep"] = _coerce_int(payload.get("max_deep", cfg["max_deep"]), cfg["max_deep"], minimum=1)
     cfg["capital"] = _coerce_float(payload.get("capital", cfg["capital"]), cfg["capital"], minimum=1.0)
     cfg["ibkr_port"] = _coerce_int(payload.get("ibkr_port", cfg["ibkr_port"]), cfg["ibkr_port"], minimum=1)
     cfg["ibkr_client_id"] = _coerce_int(payload.get("ibkr_client_id", cfg["ibkr_client_id"]), cfg["ibkr_client_id"], minimum=1)
+    cfg["ibkr_capital_limit"] = _coerce_float(
+        payload.get("ibkr_capital_limit", cfg["ibkr_capital_limit"]),
+        cfg["ibkr_capital_limit"],
+        minimum=1.0,
+    )
     cfg["paper_enabled"] = _coerce_bool(payload.get("paper_enabled"), cfg["paper_enabled"])
     cfg["no_finbert"] = _coerce_bool(payload.get("no_finbert"), cfg["no_finbert"])
     cfg["no_budget_gate"] = _coerce_bool(payload.get("no_budget_gate"), cfg["no_budget_gate"])
     if cfg["decision_engine"] not in {"llm", "rules"}:
         cfg["decision_engine"] = "llm"
-    if cfg["paper_broker"] not in {"local", "ibkr"}:
-        cfg["paper_broker"] = "local"
+    cfg["paper_broker"] = "ibkr"
+    if cfg["ibkr_existing_positions_policy"] not in {"include", "ignore"}:
+        cfg["ibkr_existing_positions_policy"] = "include"
     return cfg
 
 
@@ -1032,7 +1083,7 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.extend(["--paper-state", cfg["paper_state"]])
     if cfg["paper_webhook"]:
         cmd.extend(["--paper-webhook", cfg["paper_webhook"]])
-    cmd.extend(["--paper-broker", str(cfg["paper_broker"])])
+    cmd.extend(["--paper-broker", "ibkr"])
     cmd.extend(["--ibkr-host", str(cfg["ibkr_host"])])
     cmd.extend(["--ibkr-port", str(cfg["ibkr_port"])])
     cmd.extend(["--ibkr-client-id", str(cfg["ibkr_client_id"])])
@@ -1040,6 +1091,8 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.extend(["--ibkr-account", str(cfg["ibkr_account"])])
     cmd.extend(["--ibkr-exchange", str(cfg["ibkr_exchange"])])
     cmd.extend(["--ibkr-currency", str(cfg["ibkr_currency"])])
+    cmd.extend(["--ibkr-capital-limit", str(cfg["ibkr_capital_limit"])])
+    cmd.extend(["--ibkr-existing-positions-policy", str(cfg["ibkr_existing_positions_policy"])])
     if cfg["no_finbert"]:
         cmd.append("--no-finbert")
 

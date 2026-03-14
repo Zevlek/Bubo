@@ -26,6 +26,8 @@ Si tu utilises des APIs externes, configure aussi:
 - `BUBO_PAPER_WEBHOOK` (alertes paper)
 - `BUBO_CONNECTIVITY_CACHE_TTL_S` (cache diagnostic connectivite UI)
 - `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` (cache snapshot broker UI)
+- `BUBO_IBKR_CAPITAL_LIMIT` (capital max gere par BUBO sur IBKR)
+- `BUBO_IBKR_EXISTING_POSITIONS_POLICY` (`include` ou `ignore`)
 
 ## 2) Lancer localement avec build
 
@@ -58,8 +60,8 @@ Tous les endpoints UI/API (sauf `/health`) sont proteges par login.
 - `Run Once`: cycle complet unique.
 - `Screen Only`: preselction uniquement.
 - `Stop`: arret du process en cours.
-- `Connectivite API`: etat Gemini/NewsAPI/Finnhub/Reddit/Stocktwits + IB Gateway (bouton `Tester maintenant`).
-- `Portefeuille & Broker`: equity/cash paper, positions ouvertes, historique trades (frais), snapshot IBKR (solde/positions/executions/commissions).
+- `Connectivite API`: verifie uniquement a la demande via bouton `Tester maintenant` (pas d'auto-check).
+- `Portefeuille & Broker`: allocation BUBO (capital alloue, positions/trades) + snapshot IBKR (solde/positions/executions/commissions), avec cache et refresh manuel.
 - Logs live + telechargement des exports `data/` et `charts/`.
 
 ## 5) Deploiement GitHub (image pull sur NAS)

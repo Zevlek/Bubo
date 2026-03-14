@@ -24,6 +24,7 @@ import urllib.request
 from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import numpy as np
@@ -142,6 +143,8 @@ class EngineConfig:
     ibkr_account: str = ""
     ibkr_exchange: str = "SMART"
     ibkr_currency: str = "USD"
+    ibkr_capital_limit: float = 10000.0
+    ibkr_existing_positions_policy: str = "include"  # include | ignore
 
 
 def get_adaptive_weights(cfg: EngineConfig) -> dict:
@@ -161,6 +164,11 @@ def get_adaptive_weights(cfg: EngineConfig) -> dict:
 def _normalize_decision_engine(value: str) -> str:
     eng = str(value or "llm").strip().lower()
     return eng if eng in {"llm", "rules"} else "llm"
+
+
+def _normalize_ibkr_existing_positions_policy(value: str) -> str:
+    policy = str(value or "include").strip().lower()
+    return policy if policy in {"include", "ignore"} else "include"
 
 
 # ─────────────────────────────────────────────
@@ -1669,6 +1677,54 @@ class IBKRPaperAdapter:
         except Exception as e:
             return {"ok": False, "reason": str(e)}
 
+    def fetch_open_positions(self) -> dict:
+        ib = self._ib
+        if ib is None or not ib.isConnected():
+            return {"ok": False, "reason": "not connected", "positions": []}
+
+        account = str(self.cfg.ibkr_account or "").strip()
+        try:
+            try:
+                pos_rows = ib.positions(account=account) if account else ib.positions()
+            except TypeError:
+                pos_rows = ib.positions()
+        except Exception as e:
+            return {"ok": False, "reason": str(e), "positions": []}
+
+        out = []
+        for row in pos_rows or []:
+            contract = getattr(row, "contract", None)
+            symbol = str(getattr(contract, "symbol", "") or "").strip().upper()
+            if not symbol:
+                continue
+            try:
+                qty = int(getattr(row, "position", 0) or 0)
+            except Exception:
+                qty = 0
+            if qty <= 0:
+                continue
+            try:
+                avg_cost = float(getattr(row, "avgCost", 0.0) or 0.0)
+            except Exception:
+                avg_cost = 0.0
+            try:
+                market_price = float(getattr(row, "marketPrice", None))
+                if market_price != market_price:  # NaN
+                    market_price = None
+            except Exception:
+                market_price = None
+            if market_price is None or market_price <= 0:
+                market_price = avg_cost if avg_cost > 0 else None
+            out.append(
+                {
+                    "ticker": symbol,
+                    "shares": int(qty),
+                    "avg_cost": float(avg_cost),
+                    "market_price": float(market_price) if market_price is not None else None,
+                }
+            )
+        return {"ok": True, "positions": out}
+
 
 def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> dict:
     """
@@ -1679,6 +1735,16 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     state = load_paper_state(state_path, cfg)
     broker = _normalize_paper_broker(getattr(cfg, "paper_broker", "local"))
     state["paper_broker"] = broker
+    ibkr_positions_policy = _normalize_ibkr_existing_positions_policy(
+        getattr(cfg, "ibkr_existing_positions_policy", "include")
+    )
+    managed_capital = float(
+        getattr(cfg, "ibkr_capital_limit", cfg.initial_capital)
+        if broker == "ibkr"
+        else cfg.initial_capital
+    )
+    if managed_capital <= 0:
+        managed_capital = float(cfg.initial_capital)
 
     fee_rate = cfg.trade_fee_bps / 10_000
     slippage_rate = cfg.slippage_bps / 10_000
@@ -1688,14 +1754,51 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     warnings_list = []
     price_cache = {}
     ibkr = None
+    ibkr_trading_disabled = False
     if broker == "ibkr":
         ibkr = IBKRPaperAdapter(cfg)
         try:
             ibkr.connect()
         except Exception as e:
-            warnings_list.append(f"IBKR unavailable, fallback local: {e}")
-            broker = "local"
-            state["paper_broker"] = "local"
+            warnings_list.append(f"IBKR unavailable: {e}")
+            ibkr = None
+            ibkr_trading_disabled = True
+        if ibkr is not None and ibkr_positions_policy == "include":
+            sync = ibkr.fetch_open_positions()
+            if sync.get("ok"):
+                synced: dict[str, dict[str, Any]] = {}
+                for p in sync.get("positions", []) or []:
+                    if not isinstance(p, dict):
+                        continue
+                    ticker = str(p.get("ticker", "")).strip().upper()
+                    shares = int(p.get("shares", 0) or 0)
+                    if not ticker or shares <= 0:
+                        continue
+                    prev = positions.get(ticker, {}) if isinstance(positions, dict) else {}
+                    entry_fee = float(prev.get("entry_fee", 0.0) or 0.0)
+                    entry_date = str(prev.get("entry_date", date.today().isoformat()) or date.today().isoformat())
+                    avg_cost = float(p.get("avg_cost", 0.0) or 0.0)
+                    last_price = float(p.get("market_price", 0.0) or 0.0)
+                    if last_price <= 0:
+                        last_price = avg_cost if avg_cost > 0 else 0.0
+                    mv = float(shares * last_price)
+                    invested = float(shares * avg_cost + entry_fee)
+                    synced[ticker] = {
+                        "ticker": ticker,
+                        "shares": shares,
+                        "entry_price": float(avg_cost),
+                        "entry_fee": float(entry_fee),
+                        "entry_date": entry_date,
+                        "last_price": float(last_price),
+                        "market_value": float(mv),
+                        "unrealized_pnl": float(mv - invested),
+                    }
+                positions.clear()
+                positions.update(synced)
+            else:
+                warnings_list.append(
+                    f"IBKR positions sync failed: {sync.get('reason', 'unknown')}"
+                )
 
     # Build superset for pricing: active signals + currently held positions.
     signal_tickers = set(results.keys()) if results else set()
@@ -1723,7 +1826,9 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             exec_px = px * (1 - slippage_rate)
             exit_fee = 0.0
             sold_shares = int(pos["shares"])
-            if broker == "ibkr" and ibkr is not None:
+            if broker == "ibkr":
+                if ibkr is None or ibkr_trading_disabled:
+                    continue
                 order_res = ibkr.place_market_order(ticker, "SELL", int(pos["shares"]))
                 if not order_res.get("ok"):
                     warnings_list.append(
@@ -1803,7 +1908,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         if px is None or px <= 0:
             continue
 
-        eq_before = float(state["cash"]) + positions_market_value()
+        eq_before = float(managed_capital) if broker == "ibkr" else (float(state["cash"]) + positions_market_value())
         current_expo = positions_market_value() / eq_before if eq_before > 0 else 0.0
         remaining_expo = cfg.max_total_exposure_pct - current_expo
         if remaining_expo < cfg.min_position_pct:
@@ -1811,7 +1916,11 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         target_pct = min(target_pct, remaining_expo)
 
         exec_px = px * (1 + slippage_rate)
-        desired_value = float(state["cash"]) * target_pct
+        if broker == "ibkr":
+            remaining_alloc = max(0.0, managed_capital - positions_market_value())
+            desired_value = min(float(managed_capital) * target_pct, remaining_alloc)
+        else:
+            desired_value = float(state["cash"]) * target_pct
         shares = int(desired_value / exec_px) if exec_px > 0 else 0
         if shares <= 0:
             continue
@@ -1819,16 +1928,18 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         gross = shares * exec_px
         entry_fee = gross * fee_rate
         total_debit = gross + entry_fee
-        if total_debit > state["cash"]:
+        if broker != "ibkr" and total_debit > state["cash"]:
             affordable = int(state["cash"] / (exec_px * (1 + fee_rate))) if exec_px > 0 else 0
             shares = max(0, affordable)
             gross = shares * exec_px
             entry_fee = gross * fee_rate
             total_debit = gross + entry_fee
-        if shares <= 0 or total_debit > state["cash"]:
+        if broker != "ibkr" and (shares <= 0 or total_debit > state["cash"]):
             continue
 
-        if broker == "ibkr" and ibkr is not None:
+        if broker == "ibkr":
+            if ibkr is None or ibkr_trading_disabled:
+                continue
             order_res = ibkr.place_market_order(ticker, "BUY", int(shares))
             if not order_res.get("ok"):
                 warnings_list.append(
@@ -1840,11 +1951,11 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             gross = shares * exec_px
             entry_fee = float(order_res.get("commission", 0.0) or 0.0)
             total_debit = gross + entry_fee
-            if shares <= 0 or total_debit > state["cash"]:
-                warnings_list.append(f"IBKR BUY {ticker} rejected by cash check")
+            if shares <= 0:
                 continue
 
-        state["cash"] -= total_debit
+        if broker != "ibkr":
+            state["cash"] -= total_debit
         positions[ticker] = {
             "ticker": ticker,
             "shares": int(shares),
@@ -1873,9 +1984,15 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         unrealized += upnl
         market_value += mv
 
-    state["cash"] = round(float(state["cash"]), 4)
+    if broker == "ibkr":
+        state["cash"] = round(max(0.0, float(managed_capital) - market_value), 4)
+    else:
+        state["cash"] = round(float(state["cash"]), 4)
     state["realized_pnl"] = round(float(state["realized_pnl"]), 4)
-    state["equity"] = round(state["cash"] + market_value, 4)
+    if broker == "ibkr":
+        state["equity"] = round(float(managed_capital), 4)
+    else:
+        state["equity"] = round(state["cash"] + market_value, 4)
     state["updated_at"] = _paper_now()
     state["cycles"] = int(state.get("cycles", 0)) + 1
     for action in actions:
@@ -1911,6 +2028,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
     return {
         "paper_broker": state.get("paper_broker", broker),
+        "managed_capital": round(float(managed_capital), 4),
+        "ibkr_existing_positions_policy": ibkr_positions_policy if broker == "ibkr" else "",
         "state_path": state_path,
         "trades_path": report_paths["trades_csv"],
         "equity_curve_path": report_paths["equity_csv"],
@@ -1957,6 +2076,9 @@ def print_paper_summary(summary: dict):
 
     print("\n  Paper:")
     print(f"   Broker={summary.get('paper_broker', 'local')}")
+    if summary.get("paper_broker") == "ibkr":
+        print(f"   ManagedCapital={summary.get('managed_capital', 0.0):.2f} "
+              f"| ExistingPositions={summary.get('ibkr_existing_positions_policy', 'include')}")
     print(f"   Equity={summary['equity']:.2f} | Cash={summary['cash']:.2f} "
           f"| Realized={summary['realized_pnl']:+.2f} | Unrealized={summary['unrealized_pnl']:+.2f} "
           f"| Positions={summary['positions']}")
@@ -2080,6 +2202,18 @@ def main():
                         help="IBKR stock exchange route")
     parser.add_argument("--ibkr-currency", type=str, default=os.getenv("BUBO_IBKR_CURRENCY", "USD"),
                         help="IBKR contract currency")
+    parser.add_argument(
+        "--ibkr-capital-limit",
+        type=float,
+        default=float(os.getenv("BUBO_IBKR_CAPITAL_LIMIT", os.getenv("BUBO_CAPITAL", "10000"))),
+        help="Capital max alloue a BUBO sur IBKR",
+    )
+    parser.add_argument(
+        "--ibkr-existing-positions-policy",
+        type=str,
+        default=os.getenv("BUBO_IBKR_EXISTING_POSITIONS_POLICY", "include"),
+        help="Traitement des positions deja ouvertes sur IBKR: include|ignore",
+    )
     args = parser.parse_args()
     paper_state_path = args.paper_state
 
@@ -2110,6 +2244,10 @@ def main():
     cfg.ibkr_account = str(args.ibkr_account).strip()
     cfg.ibkr_exchange = str(args.ibkr_exchange).strip() or "SMART"
     cfg.ibkr_currency = str(args.ibkr_currency).strip().upper() or "USD"
+    cfg.ibkr_capital_limit = max(1.0, float(args.ibkr_capital_limit))
+    cfg.ibkr_existing_positions_policy = _normalize_ibkr_existing_positions_policy(
+        args.ibkr_existing_positions_policy
+    )
 
     if args.tickers:
         cfg.tickers = args.tickers

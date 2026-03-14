@@ -95,18 +95,20 @@ services:
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
-      BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
+      BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-ibkr}
       BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-ib-gateway}
       BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-4004}
       BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
       BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
       BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
       BUBO_IBKR_CURRENCY: ${BUBO_IBKR_CURRENCY:-USD}
+      BUBO_IBKR_CAPITAL_LIMIT: ${BUBO_IBKR_CAPITAL_LIMIT:-10000}
+      BUBO_IBKR_EXISTING_POSITIONS_POLICY: ${BUBO_IBKR_EXISTING_POSITIONS_POLICY:-include}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
       BUBO_CONNECTIVITY_CACHE_TTL_S: ${BUBO_CONNECTIVITY_CACHE_TTL_S:-120}
-      BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-20}
+      BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-60}
       BUBO_WEB_AUTH_ENABLED: ${BUBO_WEB_AUTH_ENABLED:-1}
       BUBO_WEB_USER: ${BUBO_WEB_USER:-admin}
       BUBO_WEB_PASSWORD: ${BUBO_WEB_PASSWORD:-change-me}
@@ -176,18 +178,20 @@ services:
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
       BUBO_PAPER_WEBHOOK: ${BUBO_PAPER_WEBHOOK:-}
-      BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-local}
+      BUBO_PAPER_BROKER: ${BUBO_PAPER_BROKER:-ibkr}
       BUBO_IBKR_HOST: ${BUBO_IBKR_HOST:-ib-gateway}
       BUBO_IBKR_PORT: ${BUBO_IBKR_PORT:-4004}
       BUBO_IBKR_CLIENT_ID: ${BUBO_IBKR_CLIENT_ID:-42}
       BUBO_IBKR_ACCOUNT: ${BUBO_IBKR_ACCOUNT:-}
       BUBO_IBKR_EXCHANGE: ${BUBO_IBKR_EXCHANGE:-SMART}
       BUBO_IBKR_CURRENCY: ${BUBO_IBKR_CURRENCY:-USD}
+      BUBO_IBKR_CAPITAL_LIMIT: ${BUBO_IBKR_CAPITAL_LIMIT:-10000}
+      BUBO_IBKR_EXISTING_POSITIONS_POLICY: ${BUBO_IBKR_EXISTING_POSITIONS_POLICY:-include}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
       BUBO_CONNECTIVITY_CACHE_TTL_S: ${BUBO_CONNECTIVITY_CACHE_TTL_S:-120}
-      BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-20}
+      BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-60}
       BUBO_WEB_AUTH_ENABLED: ${BUBO_WEB_AUTH_ENABLED:-1}
       BUBO_WEB_USER: ${BUBO_WEB_USER:-admin}
       BUBO_WEB_PASSWORD: ${BUBO_WEB_PASSWORD:-change-me}
@@ -263,7 +267,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
 | `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
 | `BUBO_CONNECTIVITY_CACHE_TTL_S` | Cache du diagnostic connectivite API/IBKR dans l'UI | Non | Entier `>= 10` secondes | `120` |
-| `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` | Cache du snapshot portefeuille/compte IBKR dans l'UI | Non | Entier `>= 10` secondes | `20` |
+| `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` | Cache du snapshot portefeuille/compte IBKR dans l'UI | Non | Entier `>= 10` secondes | `60` |
 | `BUBO_WEB_AUTH_ENABLED` | Active le login UI | Non | `0` ou `1` | `1` |
 | `BUBO_WEB_USER` | Utilisateur login UI | Requis si auth active | Texte libre (ex: `admin`) | `admin` |
 | `BUBO_WEB_PASSWORD` | Mot de passe login UI | Requis si auth active (fortement recommande) | Texte libre | `change-me` |
@@ -276,13 +280,15 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
 | `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |
-| `BUBO_PAPER_BROKER` | Moteur paper: local ou ordres paper IBKR | Non | `local` ou `ibkr` | `local` |
+| `BUBO_PAPER_BROKER` | Broker paper (UI force IBKR) | Non | `ibkr` | `ibkr` |
 | `BUBO_IBKR_HOST` | Host TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `ib-gateway`, `192.168.x.x` | `ib-gateway` |
 | `BUBO_IBKR_PORT` | Port TWS/IB Gateway | Non (utile si broker=`ibkr`) | Ex: `4004` (ib-gateway), `7497` (TWS) | `4004` |
 | `BUBO_IBKR_CLIENT_ID` | Client id IB API | Non (utile si broker=`ibkr`) | Entier `>= 1` | `42` |
 | `BUBO_IBKR_ACCOUNT` | Compte paper IBKR (optionnel) | Non | Ex: `DUXXXXXX` | vide |
 | `BUBO_IBKR_EXCHANGE` | Routing exchange IBKR | Non (utile si broker=`ibkr`) | Ex: `SMART` | `SMART` |
 | `BUBO_IBKR_CURRENCY` | Devise contrat actions | Non (utile si broker=`ibkr`) | Ex: `USD`, `EUR` | `USD` |
+| `BUBO_IBKR_CAPITAL_LIMIT` | Capital max que BUBO est autorise a gerer sur IBKR | Non | Nombre `> 0` (ex: `10000`) | `10000` |
+| `BUBO_IBKR_EXISTING_POSITIONS_POLICY` | Gestion des positions IBKR deja ouvertes | Non | `include` ou `ignore` | `include` |
 | `IBG_TWS_USERID` | Login IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Identifiant IBKR | vide |
 | `IBG_TWS_PASSWORD` | Mot de passe IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Mot de passe IBKR | vide |
 | `IBG_TRADING_MODE` | Mode IB Gateway | Non | `paper`, `live`, `both` | `paper` |

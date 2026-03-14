@@ -152,7 +152,7 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertEqual(summary["actions"], [])
 
-    def test_ibkr_unavailable_falls_back_to_local(self):
+    def test_ibkr_unavailable_does_not_fallback_to_local(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "paper_state.json"
             self.cfg.paper_broker = "ibkr"
@@ -176,8 +176,10 @@ class PaperTradingTests(unittest.TestCase):
                 bubo_engine.IBKRPaperAdapter.connect = original_connect
                 self.cfg.paper_broker = "local"
 
-            self.assertEqual(summary["paper_broker"], "local")
-            self.assertTrue(any("fallback local" in w for w in summary.get("warnings", [])))
+            self.assertEqual(summary["paper_broker"], "ibkr")
+            self.assertEqual(summary["positions"], 0)
+            self.assertEqual(summary["actions"], [])
+            self.assertTrue(any("IBKR unavailable" in w for w in summary.get("warnings", [])))
 
     def test_notify_webhook_skips_when_no_actions(self):
         ok, reason = notify_paper_webhook(
