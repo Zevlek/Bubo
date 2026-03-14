@@ -36,6 +36,14 @@ docker compose -f docker-compose.ghcr.yml up -d
 http://IP_DU_NAS:7654
 ```
 
+## Interface web (vue simplifiee)
+
+- Le bandeau affiche uniquement `🦉 Bubo` + statut de connexion.
+- Le bloc `Execution` montre surtout les actions (`surveillance`, `run once`, `stop`).
+- Les `Parametres` sont masques par defaut (bouton `Parametres`).
+- Le diagnostic API/IBKR n'est lance que manuellement (bouton `Verifier les API`).
+- Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
+
 ## Build local (sans GHCR)
 
 ```bash

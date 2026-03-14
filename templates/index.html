@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BUBO Control Room</title>
+  <title>🦉 Bubo</title>
   <style>
     :root {
       --bg: #f4f6f8;
@@ -197,6 +197,10 @@
       line-height: 1.3;
     }
 
+    .hidden {
+      display: none !important;
+    }
+
     .connectivity {
       margin-top: 12px;
       padding: 10px;
@@ -279,6 +283,14 @@
       width: 100%;
       padding: 8px 10px;
       font-size: 0.82rem;
+    }
+
+    .settings-panel {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid #d7e1e8;
+      border-radius: 10px;
+      background: #f9fcff;
     }
 
     .toolbar {
@@ -379,7 +391,7 @@
 
     .portfolio-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       gap: 14px;
     }
 
@@ -406,6 +418,42 @@
       color: #132f40;
     }
 
+    .kpi-line {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 8px;
+    }
+
+    .kpi-card {
+      border: 1px solid #dbe5ec;
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #f8fcff;
+    }
+
+    .kpi-card .k-label {
+      color: #557081;
+      font-size: 0.78rem;
+      margin-bottom: 4px;
+    }
+
+    .kpi-card .k-val {
+      color: #173749;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+
+    .pnl-pos {
+      color: #1e8449;
+      font-weight: 700;
+    }
+
+    .pnl-neg {
+      color: #c0392b;
+      font-weight: 700;
+    }
+
     .table-wrap h3 {
       margin: 0;
       padding: 8px 10px;
@@ -419,6 +467,7 @@
       .grid { grid-template-columns: 1fr; }
       #logs { min-height: 280px; max-height: 280px; }
       .portfolio-grid { grid-template-columns: 1fr; }
+      .kpi-line { grid-template-columns: 1fr 1fr; }
     }
   </style>
 </head>
@@ -426,66 +475,74 @@
   <div class="wrap">
     <section class="hero">
       <div class="hero-top">
-        <h1>BUBO Control Room</h1>
+        <h1>🦉 Bubo</h1>
         {% if auth_enabled %}
         <div class="hero-auth">
-          <span>Connecte: {{ auth_user }}</span>
+          <span>Connecté: {{ auth_user }}</span>
           <form action="/logout" method="post">
-            <button type="submit">Se deconnecter</button>
+            <button type="submit">Se déconnecter</button>
           </form>
         </div>
         {% endif %}
       </div>
-      <p>Interface web pour piloter le moteur de trading sur le NAS, suivre les logs et recuperer les exports.</p>
     </section>
 
     <div class="grid">
       <section class="card">
-        <h2>Execution</h2>
+        <h2>Exécution</h2>
         <div class="status">
           <span id="run-dot" class="dot"></span>
-          <strong id="run-state">Idle</strong>
+          <strong id="run-state">Inactif</strong>
         </div>
-        <div id="status-details" class="hint">Timezone: {{ timezone }}</div>
+        <div id="status-details" class="hint">Fuseau horaire: {{ timezone }}</div>
 
-        <div class="connectivity">
+        <div class="actions">
+          <button class="btn-main" id="btn-watch">Lancer la surveillance</button>
+          <button class="btn-soft" id="btn-once">Exécuter une fois</button>
+          <button class="btn-warn" id="btn-screen">Présélection seule</button>
+          <button class="btn-stop" id="btn-stop">Arrêter</button>
+          <button class="btn-soft" id="btn-settings-toggle" type="button">Paramètres</button>
+          <button class="btn-soft" id="btn-connectivity" type="button">Vérifier les API</button>
+        </div>
+
+        <div class="connectivity hidden" id="connectivity-panel">
           <div class="toolbar" style="margin-bottom: 0;">
-            <h2 style="margin: 0; font-size: 0.92rem;">Connectivite API</h2>
-            <small id="conn-meta">A la demande (manuel)</small>
+            <h2 style="margin: 0; font-size: 0.92rem;">État des API</h2>
+            <small id="conn-meta">À la demande (manuel)</small>
           </div>
           <div id="connectivity-list" class="connectivity-list">
             <div class="conn-item">
               <div class="conn-main">
                 <div class="conn-label">Diagnostic</div>
-                <div class="conn-msg">Clique sur "Tester maintenant" pour lancer un check.</div>
+                <div class="conn-msg">Clique sur "Vérifier les API" pour lancer un test.</div>
               </div>
               <span class="badge disabled">N/A</span>
             </div>
           </div>
-          <button class="btn-soft conn-refresh" id="btn-connectivity" type="button">Tester maintenant</button>
         </div>
 
-        <label class="label" for="universe_file">Universe file</label>
+        <div class="settings-panel hidden" id="settings-panel">
+        <label class="label" for="universe_file">Fichier d'univers</label>
         <input id="universe_file" type="text" value="{{ defaults.universe_file }}">
 
-        <label class="label" for="decision_engine">Decision engine</label>
+        <label class="label" for="decision_engine">Moteur de décision</label>
         <select id="decision_engine" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
           <option value="llm" {% if defaults.decision_engine == "llm" %}selected{% endif %}>llm (Gemini)</option>
-          <option value="rules" {% if defaults.decision_engine == "rules" %}selected{% endif %}>rules (manuel)</option>
+          <option value="rules" {% if defaults.decision_engine == "rules" %}selected{% endif %}>règles (manuel)</option>
         </select>
 
         <div class="row-2">
           <div>
-            <label class="label" for="preselect_top">Preselect top</label>
+            <label class="label" for="preselect_top">Taille présélection</label>
             <input id="preselect_top" type="number" min="1" value="{{ defaults.preselect_top }}">
           </div>
           <div>
-            <label class="label" for="max_deep">Max deep</label>
+            <label class="label" for="max_deep">Analyse détaillée max</label>
             <input id="max_deep" type="number" min="1" value="{{ defaults.max_deep }}">
           </div>
         </div>
 
-        <label class="label" for="watch_interval_min">Watch interval (min)</label>
+        <label class="label" for="watch_interval_min">Intervalle surveillance (min)</label>
         <input id="watch_interval_min" type="number" min="1" value="{{ defaults.watch_interval_min }}">
 
         <div class="row-2">
@@ -494,78 +551,72 @@
             <input id="capital" type="number" min="1" step="100" value="{{ defaults.capital }}">
           </div>
           <div>
-            <label class="label" for="paper_state">Paper state</label>
+            <label class="label" for="paper_state">État paper</label>
             <input id="paper_state" type="text" value="{{ defaults.paper_state }}">
           </div>
         </div>
 
-        <label class="label" for="paper_webhook">Paper webhook</label>
+        <label class="label" for="paper_webhook">Webhook paper</label>
         <input id="paper_webhook" type="text" value="{{ defaults.paper_webhook }}" placeholder="https://...">
 
         <div class="row-2">
           <div>
-            <label class="label" for="ibkr_account">IBKR account (opt.)</label>
+            <label class="label" for="ibkr_account">Compte IBKR (optionnel)</label>
             <input id="ibkr_account" type="text" value="{{ defaults.ibkr_account }}">
           </div>
           <div>
-            <label class="label" for="ibkr_capital_limit">Capital gere sur IBKR</label>
+            <label class="label" for="ibkr_capital_limit">Capital géré sur IBKR</label>
             <input id="ibkr_capital_limit" type="number" min="1" step="100" value="{{ defaults.ibkr_capital_limit }}">
           </div>
         </div>
 
         <div class="row-2">
           <div>
-            <label class="label" for="ibkr_host">IBKR host</label>
+            <label class="label" for="ibkr_host">Hôte IBKR</label>
             <input id="ibkr_host" type="text" value="{{ defaults.ibkr_host }}">
           </div>
           <div>
-            <label class="label" for="ibkr_port">IBKR port</label>
+            <label class="label" for="ibkr_port">Port IBKR</label>
             <input id="ibkr_port" type="number" min="1" value="{{ defaults.ibkr_port }}">
           </div>
         </div>
 
         <div class="row-2">
           <div>
-            <label class="label" for="ibkr_client_id">IBKR client id</label>
+            <label class="label" for="ibkr_client_id">Client ID IBKR</label>
             <input id="ibkr_client_id" type="number" min="1" value="{{ defaults.ibkr_client_id }}">
           </div>
           <div>
-            <label class="label" for="ibkr_exchange">IBKR exchange</label>
+            <label class="label" for="ibkr_exchange">Marché IBKR</label>
             <input id="ibkr_exchange" type="text" value="{{ defaults.ibkr_exchange }}">
           </div>
         </div>
 
-        <label class="label" for="ibkr_currency">IBKR currency</label>
+        <label class="label" for="ibkr_currency">Devise IBKR</label>
         <input id="ibkr_currency" type="text" value="{{ defaults.ibkr_currency }}">
 
-        <label class="label" for="ibkr_existing_positions_policy">Positions deja ouvertes sur IBKR</label>
+        <label class="label" for="ibkr_existing_positions_policy">Positions déjà ouvertes sur IBKR</label>
         <select id="ibkr_existing_positions_policy" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
-          <option value="include" {% if defaults.ibkr_existing_positions_policy == "include" %}selected{% endif %}>include (les integrer et les gerer)</option>
-          <option value="ignore" {% if defaults.ibkr_existing_positions_policy == "ignore" %}selected{% endif %}>ignore (ne gerer que les nouvelles positions BUBO)</option>
+          <option value="include" {% if defaults.ibkr_existing_positions_policy == "include" %}selected{% endif %}>inclure (les intégrer et les gérer)</option>
+          <option value="ignore" {% if defaults.ibkr_existing_positions_policy == "ignore" %}selected{% endif %}>ignorer (ne gérer que les nouvelles positions Bubo)</option>
         </select>
 
         <div class="checks">
           <label><input id="paper_enabled" type="checkbox" {% if defaults.paper_enabled %}checked{% endif %}> Activer paper trading</label>
-          <label><input id="no_finbert" type="checkbox" {% if defaults.no_finbert %}checked{% endif %}> No FinBERT (plus leger)</label>
-          <label><input id="no_budget_gate" type="checkbox" {% if defaults.no_budget_gate %}checked{% endif %}> No budget gate</label>
+          <label><input id="no_finbert" type="checkbox" {% if defaults.no_finbert %}checked{% endif %}> Désactiver FinBERT (plus léger)</label>
+          <label><input id="no_budget_gate" type="checkbox" {% if defaults.no_budget_gate %}checked{% endif %}> Désactiver la limite d'exposition</label>
+        </div>
         </div>
 
-        <div class="actions">
-          <button class="btn-main" id="btn-watch">Start Watch</button>
-          <button class="btn-soft" id="btn-once">Run Once</button>
-          <button class="btn-warn" id="btn-screen">Screen Only</button>
-          <button class="btn-stop" id="btn-stop">Stop</button>
-        </div>
-
-        <div class="msg" id="message-box">Pret.</div>
+        <div class="msg" id="message-box">Prêt.</div>
       </section>
 
       <section class="card">
         <div class="toolbar">
-          <h2>Logs Live</h2>
+          <h2>Logs en direct</h2>
           <div class="toolbar-right">
-            <small id="log-meta">tail 300</small>
-            <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+            <small id="log-meta">300 lignes</small>
+            <label><input type="checkbox" id="log-autoscroll" checked> Défilement auto</label>
           </div>
         </div>
         <pre id="logs"></pre>
@@ -574,85 +625,44 @@
 
     <section class="card" style="margin-top: 16px;">
       <div class="toolbar">
-        <h2>Portefeuille & Broker</h2>
+        <h2>Portefeuille IBKR</h2>
         <div class="toolbar-right">
           <small id="portfolio-meta">Chargement...</small>
-          <button class="btn-soft" id="btn-portfolio" type="button" style="padding:6px 10px;">Refresh</button>
+          <button class="btn-soft" id="btn-portfolio" type="button" style="padding:6px 10px;">Actualiser</button>
         </div>
       </div>
       <div class="portfolio-grid">
         <div class="subcard">
-          <h3>Allocation BUBO (pilotage IBKR)</h3>
-          <div id="paper-kpis">
-            <div class="kpi">Chargement...</div>
-          </div>
+          <h3>Vue portefeuille</h3>
+          <div id="portfolio-kpis"><div class="kpi">Chargement...</div></div>
           <div class="table-wrap" style="margin-top:8px;">
             <h3>Positions ouvertes</h3>
             <table>
               <thead>
                 <tr>
-                  <th>Ticker</th>
-                  <th>Qty</th>
-                  <th>Entry</th>
-                  <th>Last</th>
-                  <th>U.PnL</th>
+                  <th>Nom</th>
+                  <th>Symbole</th>
+                  <th>Quantité</th>
+                  <th>Prix moyen</th>
+                  <th>Prix d'entrée</th>
+                  <th>Valeur</th>
+                  <th>P/L latent</th>
                 </tr>
               </thead>
-              <tbody id="paper-pos-body">
-                <tr><td colspan="5">Chargement...</td></tr>
+              <tbody id="portfolio-pos-body">
+                <tr><td colspan="7">Chargement...</td></tr>
               </tbody>
             </table>
           </div>
           <div class="table-wrap" style="margin-top:8px;">
-            <h3>Trades fermes (avec frais)</h3>
+            <h3>Historique des exécutions (frais inclus)</h3>
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Ticker</th>
-                  <th>Shares</th>
-                  <th>PnL</th>
-                  <th>Fees</th>
-                </tr>
-              </thead>
-              <tbody id="paper-trades-body">
-                <tr><td colspan="5">Chargement...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="subcard">
-          <h3>IBKR (snapshot live)</h3>
-          <div id="ibkr-kpis">
-            <div class="kpi">Chargement...</div>
-          </div>
-          <div class="table-wrap" style="margin-top:8px;">
-            <h3>Positions IBKR</h3>
-            <table>
-              <thead>
-                <tr>
                   <th>Symbole</th>
-                  <th>Qty</th>
-                  <th>Avg Cost</th>
-                  <th>Mkt Value</th>
-                  <th>U.PnL</th>
-                </tr>
-              </thead>
-              <tbody id="ibkr-pos-body">
-                <tr><td colspan="5">Chargement...</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="table-wrap" style="margin-top:8px;">
-            <h3>Executions recentes (commissions)</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Symbole</th>
-                  <th>Side</th>
-                  <th>Qty</th>
+                  <th>Sens</th>
+                  <th>Quantité</th>
                   <th>Prix</th>
                   <th>Commission</th>
                 </tr>
@@ -676,9 +686,9 @@
           <thead>
             <tr>
               <th>Fichier</th>
-              <th>Scope</th>
+              <th>Dossier</th>
               <th>Taille (KB)</th>
-              <th>Modifie</th>
+              <th>Modifié</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -700,12 +710,11 @@
     const logAutoScrollEl = document.getElementById("log-autoscroll");
     const connectivityListEl = document.getElementById("connectivity-list");
     const connectivityMetaEl = document.getElementById("conn-meta");
+    const connectivityPanelEl = document.getElementById("connectivity-panel");
+    const settingsPanelEl = document.getElementById("settings-panel");
     const portfolioMetaEl = document.getElementById("portfolio-meta");
-    const paperKpisEl = document.getElementById("paper-kpis");
-    const paperPosBodyEl = document.getElementById("paper-pos-body");
-    const paperTradesBodyEl = document.getElementById("paper-trades-body");
-    const ibkrKpisEl = document.getElementById("ibkr-kpis");
-    const ibkrPosBodyEl = document.getElementById("ibkr-pos-body");
+    const portfolioKpisEl = document.getElementById("portfolio-kpis");
+    const portfolioPosBodyEl = document.getElementById("portfolio-pos-body");
     const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
     let lastPortfolioRefreshEpoch = 0;
     const PORTFOLIO_AUTO_REFRESH_MS = 60000;
@@ -768,6 +777,10 @@
       return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}`;
     }
 
+    function pnlClass(value) {
+      return asNumber(value, 0) >= 0 ? "pnl-pos" : "pnl-neg";
+    }
+
     function connectivityBadgeLabel(state) {
       if (state === "ok") return "OK";
       if (state === "error") return "ERREUR";
@@ -783,10 +796,10 @@
           body: JSON.stringify(configPayload())
         });
         const data = await res.json();
-        setMessage(data.message || "Action executee", !data.ok);
+        setMessage(data.message || "Action exécutée", !data.ok);
         await refreshAll();
       } catch (err) {
-        setMessage("Erreur reseau: " + err, true);
+        setMessage("Erreur réseau: " + err, true);
       }
     }
 
@@ -794,10 +807,10 @@
       try {
         const res = await fetch("/api/stop", { method: "POST" });
         const data = await res.json();
-        setMessage(data.message || "Stop", !data.ok);
+        setMessage(data.message || "Arrêt demandé", !data.ok);
         await refreshAll();
       } catch (err) {
-        setMessage("Erreur reseau: " + err, true);
+        setMessage("Erreur réseau: " + err, true);
       }
     }
 
@@ -807,20 +820,20 @@
 
       if (data.running) {
         runDotEl.classList.add("run");
-        runStateEl.textContent = `Running (${data.mode})`;
+        runStateEl.textContent = `En cours (${data.mode})`;
       } else {
         runDotEl.classList.remove("run");
-        runStateEl.textContent = "Idle";
+        runStateEl.textContent = "Inactif";
       }
 
       const details = [
-        data.pid ? `PID ${data.pid}` : "No active process",
-        data.started_at ? `started ${data.started_at}` : "",
+        data.pid ? `PID ${data.pid}` : "Aucun processus actif",
+        data.started_at ? `démarré ${data.started_at}` : "",
         data.running ? `uptime ${data.uptime_s}s` : "",
-        data.last_exit_code !== null && data.last_exit_code !== undefined ? `last exit ${data.last_exit_code}` : "",
-        data.last_finished_at ? `finished ${data.last_finished_at}` : ""
+        data.last_exit_code !== null && data.last_exit_code !== undefined ? `dernier code ${data.last_exit_code}` : "",
+        data.last_finished_at ? `terminé ${data.last_finished_at}` : ""
       ].filter(Boolean).join(" | ");
-      statusDetailsEl.textContent = details || "No runtime details";
+      statusDetailsEl.textContent = details || "Aucun détail d'exécution";
     }
 
     async function refreshLogs() {
@@ -839,7 +852,7 @@
       );
 
       if (hasSelectionInLogs) {
-        document.getElementById("log-meta").textContent = `tail ${data.count || 0} | selection active`;
+        document.getElementById("log-meta").textContent = `${data.count || 0} lignes | sélection active`;
         return;
       }
 
@@ -852,7 +865,7 @@
       } else {
         logsEl.scrollTop = prevTop;
       }
-      document.getElementById("log-meta").textContent = `tail ${data.count || 0}`;
+      document.getElementById("log-meta").textContent = `${data.count || 0} lignes`;
     }
 
     async function refreshFiles() {
@@ -870,12 +883,13 @@
           <td>${f.scope}</td>
           <td>${f.size_kb}</td>
           <td>${f.modified}</td>
-          <td><a href="${f.url}" target="_blank" rel="noopener">Download</a></td>
+          <td><a href="${f.url}" target="_blank" rel="noopener">Télécharger</a></td>
         </tr>
       `).join("");
     }
 
     async function refreshConnectivity(force = false) {
+      connectivityPanelEl.classList.remove("hidden");
       try {
         const suffix = force ? "?force=1" : "";
         const res = await fetch(`/api/connectivity${suffix}`, {
@@ -890,13 +904,13 @@
           connectivityListEl.innerHTML = `
             <div class="conn-item">
               <div class="conn-main">
-                <div class="conn-label">Aucun resultat</div>
-                <div class="conn-msg">Le diagnostic n'a retourne aucun service.</div>
+                <div class="conn-label">Aucun résultat</div>
+                <div class="conn-msg">Le diagnostic n'a retourné aucun service.</div>
               </div>
               <span class="badge warning">ATTENTION</span>
             </div>
           `;
-          connectivityMetaEl.textContent = "Aucune donnee";
+          connectivityMetaEl.textContent = "Aucune donnée";
           return;
         }
 
@@ -944,108 +958,77 @@
           body: JSON.stringify(configPayload())
         });
         const data = await res.json();
-
         const paper = data.paper || {};
         const ibkr = data.ibkr || {};
-        const currency = (ibkr.currency || "USD");
-        const managedCapital = asNumber(paper.equity, 0);
+        const summary = ibkr.account_summary || {};
+        const currency = ibkr.currency || "USD";
+        const paperByTicker = new Map((paper.positions || []).map(p => [String(p.ticker || "").toUpperCase(), p]));
 
-        paperKpisEl.innerHTML = `
-          <div class="kpi"><strong>Broker:</strong> ${escapeHtml(paper.broker || "n/a")}</div>
-          <div class="kpi"><strong>Capital alloue:</strong> ${fmtMoney(managedCapital, currency)} | <strong>Cash dispo:</strong> ${fmtMoney(paper.cash, currency)}</div>
-          <div class="kpi"><strong>Realized:</strong> ${fmtSigned(paper.realized_pnl)} | <strong>Positions:</strong> ${asNumber(paper.positions_count, 0)}</div>
-          <div class="kpi"><strong>Closed trades:</strong> ${asNumber(paper.closed_trades_count, 0)} | <strong>Cycles:</strong> ${asNumber(paper.cycles, 0)}</div>
-        `;
-
-        const paperPositions = paper.positions || [];
-        if (!paperPositions.length) {
-          paperPosBodyEl.innerHTML = "<tr><td colspan='5'>Aucune position ouverte.</td></tr>";
-        } else {
-          paperPosBodyEl.innerHTML = paperPositions.slice(0, 30).map(p => `
-            <tr>
-              <td>${escapeHtml(p.ticker)}</td>
-              <td>${asNumber(p.shares, 0)}</td>
-              <td>${asNumber(p.entry_price, 0).toFixed(2)}</td>
-              <td>${asNumber(p.last_price, 0).toFixed(2)}</td>
-              <td>${fmtSigned(p.unrealized_pnl)}</td>
-            </tr>
-          `).join("");
+        if (!ibkr.enabled || !ibkr.ok) {
+          const message = ibkr.enabled ? (ibkr.message || "Snapshot IBKR indisponible.") : "IBKR non actif.";
+          portfolioKpisEl.innerHTML = `<div class="kpi"><strong>Erreur:</strong> ${escapeHtml(message)}</div>`;
+          portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position disponible.</td></tr>";
+          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Aucune exécution disponible.</td></tr>";
+          portfolioMetaEl.textContent = "Snapshot indisponible";
+          return;
         }
 
-        const paperTrades = (paper.closed_trades_csv && paper.closed_trades_csv.length ? paper.closed_trades_csv : paper.closed_trades) || [];
-        if (!paperTrades.length) {
-          paperTradesBodyEl.innerHTML = "<tr><td colspan='5'>Aucun trade ferme.</td></tr>";
+        portfolioKpisEl.innerHTML = `
+          <div class="kpi"><strong>Compte:</strong> ${escapeHtml(ibkr.account || "n/a")} | <strong>Latence:</strong> ${asNumber(ibkr.latency_ms, 0)} ms</div>
+          <div class="kpi-line">
+            <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${fmtMoney(summary.NetLiquidation, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Liquidités</div><div class="k-val">${fmtMoney(summary.TotalCashValue, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Capital géré</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">P/L latent</div><div class="k-val ${pnlClass(summary.UnrealizedPnL)}">${fmtSigned(summary.UnrealizedPnL)} ${currency}</div></div>
+          </div>
+        `;
+
+        const positions = ibkr.positions || [];
+        if (!positions.length) {
+          portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position ouverte.</td></tr>";
         } else {
-          paperTradesBodyEl.innerHTML = paperTrades.slice(0, 40).map(t => {
-            const entryFee = asNumber(t.entry_fee, 0);
-            const exitFee = asNumber(t.exit_fee, 0);
-            const totalFee = entryFee + exitFee;
-            const date = t.exit_date || t.entry_date || t.timestamp || "";
+          portfolioPosBodyEl.innerHTML = positions.slice(0, 60).map(pos => {
+            const symbol = String(pos.symbol || "");
+            const key = symbol.toUpperCase();
+            const paperPos = paperByTicker.get(key) || {};
+            const entry = asNumber(paperPos.entry_price, NaN);
+            const avgCost = asNumber(pos.avg_cost, NaN);
+            const qty = asNumber(pos.quantity, 0);
+            const marketValue = asNumber(pos.market_value, NaN);
+            const unrealized = asNumber(pos.unrealized_pnl, NaN);
+            const displayName = symbol || "n/a";
             return `
               <tr>
-                <td>${escapeHtml(date)}</td>
-                <td>${escapeHtml(t.ticker || "")}</td>
-                <td>${asNumber(t.shares, 0)}</td>
-                <td>${fmtSigned(t.pnl)}</td>
-                <td>${totalFee.toFixed(2)}</td>
+                <td>${escapeHtml(displayName)}</td>
+                <td>${escapeHtml(symbol)}</td>
+                <td>${qty.toFixed(0)}</td>
+                <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
+                <td>${Number.isFinite(entry) ? entry.toFixed(2) : (Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a")}</td>
+                <td>${Number.isFinite(marketValue) ? fmtMoney(marketValue, currency) : "n/a"}</td>
+                <td class="${pnlClass(unrealized)}">${fmtSigned(unrealized)} ${currency}</td>
               </tr>
             `;
           }).join("");
         }
 
-        if (!ibkr.enabled) {
-          ibkrKpisEl.innerHTML = "<div class='kpi'>IBKR non actif (paper trading desactive).</div>";
-          ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>IBKR non actif.</td></tr>";
-          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>IBKR non actif.</td></tr>";
-        } else if (!ibkr.ok) {
-          ibkrKpisEl.innerHTML = `<div class='kpi'><strong>Erreur:</strong> ${escapeHtml(ibkr.message || "Snapshot indisponible")}</div>`;
-          ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>Snapshot indisponible.</td></tr>";
-          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Snapshot indisponible.</td></tr>";
+        const executions = ibkr.executions || [];
+        if (!executions.length) {
+          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Aucune exécution récente.</td></tr>";
         } else {
-          const s = ibkr.account_summary || {};
-          const cc = ibkr.currency || "USD";
-          ibkrKpisEl.innerHTML = `
-            <div class="kpi"><strong>Compte:</strong> ${escapeHtml(ibkr.account || "n/a")} | <strong>Latency:</strong> ${asNumber(ibkr.latency_ms, 0)} ms</div>
-            <div class="kpi"><strong>NetLiq:</strong> ${fmtMoney(s.NetLiquidation, cc)} | <strong>Cash:</strong> ${fmtMoney(s.TotalCashValue, cc)}</div>
-            <div class="kpi"><strong>BuyingPower:</strong> ${fmtMoney(s.BuyingPower, cc)} | <strong>AvailFunds:</strong> ${fmtMoney(s.AvailableFunds, cc)}</div>
-            <div class="kpi"><strong>RealizedPnL:</strong> ${fmtSigned(s.RealizedPnL)} | <strong>UnrealizedPnL:</strong> ${fmtSigned(s.UnrealizedPnL)}</div>
-            <div class="kpi"><strong>Commissions (exec list):</strong> ${fmtMoney(ibkr.total_commission, ibkr.total_commission_currency || cc)}</div>
-          `;
-
-          const ibkrPositions = ibkr.positions || [];
-          if (!ibkrPositions.length) {
-            ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>Aucune position IBKR ouverte.</td></tr>";
-          } else {
-            ibkrPosBodyEl.innerHTML = ibkrPositions.slice(0, 40).map(p => `
-              <tr>
-                <td>${escapeHtml(p.symbol || "")}</td>
-                <td>${asNumber(p.quantity, 0)}</td>
-                <td>${asNumber(p.avg_cost, 0).toFixed(2)}</td>
-                <td>${Number.isFinite(asNumber(p.market_value, NaN)) ? asNumber(p.market_value, 0).toFixed(2) : "n/a"}</td>
-                <td>${fmtSigned(p.unrealized_pnl)}</td>
-              </tr>
-            `).join("");
-          }
-
-          const executions = ibkr.executions || [];
-          if (!executions.length) {
-            ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Aucune execution recente.</td></tr>";
-          } else {
-            ibkrExecBodyEl.innerHTML = executions.slice(0, 60).map(e => `
-              <tr>
-                <td>${escapeHtml(e.time || "")}</td>
-                <td>${escapeHtml(e.symbol || "")}</td>
-                <td>${escapeHtml(e.side || "")}</td>
-                <td>${asNumber(e.shares, 0)}</td>
-                <td>${asNumber(e.price, 0).toFixed(4)}</td>
-                <td>${asNumber(e.commission, 0).toFixed(2)} ${escapeHtml(e.commission_currency || "")}</td>
-              </tr>
-            `).join("");
-          }
+          ibkrExecBodyEl.innerHTML = executions.slice(0, 60).map(e => `
+            <tr>
+              <td>${escapeHtml(e.time || "")}</td>
+              <td>${escapeHtml(e.symbol || "")}</td>
+              <td>${escapeHtml(e.side || "")}</td>
+              <td>${asNumber(e.shares, 0).toFixed(0)}</td>
+              <td>${asNumber(e.price, 0).toFixed(4)}</td>
+              <td>${asNumber(e.commission, 0).toFixed(2)} ${escapeHtml(e.commission_currency || currency)}</td>
+            </tr>
+          `).join("");
         }
 
-        const mode = ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB live";
-        const stale = ibkr.stale ? ` | stale (${String(ibkr.stale_reason || "refresh failed")})` : "";
+        const mode = ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB direct";
+        const stale = ibkr.stale ? ` | données figées (${String(ibkr.stale_reason || "échec refresh")})` : "";
         portfolioMetaEl.textContent = `${mode}${stale} | ${data.generated_at || ""}`;
       } catch (err) {
         portfolioMetaEl.textContent = `Erreur snapshot: ${escapeHtml(err)}`;
@@ -1068,6 +1051,9 @@
     document.getElementById("btn-stop").addEventListener("click", stopProcess);
     document.getElementById("btn-connectivity").addEventListener("click", () => refreshConnectivity(true));
     document.getElementById("btn-portfolio").addEventListener("click", () => refreshPortfolio(true));
+    document.getElementById("btn-settings-toggle").addEventListener("click", () => {
+      settingsPanelEl.classList.toggle("hidden");
+    });
     logsEl.addEventListener("scroll", () => {
       const distance = (logsEl.scrollHeight - logsEl.clientHeight) - logsEl.scrollTop;
       if (distance > 16 && logAutoScrollEl.checked) {
