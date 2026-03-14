@@ -777,6 +777,12 @@
       return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}`;
     }
 
+    function fmtSignedMoney(value, currency = "USD", digits = 2) {
+      const n = asNumber(value, NaN);
+      if (!Number.isFinite(n)) return "n/a";
+      return `${n >= 0 ? "+" : ""}${n.toFixed(digits)} ${currency}`;
+    }
+
     function pnlClass(value) {
       return asNumber(value, 0) >= 0 ? "pnl-pos" : "pnl-neg";
     }
@@ -961,6 +967,7 @@
         const ibkr = data.ibkr || {};
         const summary = ibkr.account_summary || {};
         const currency = ibkr.currency || "USD";
+        const positions = ibkr.positions || [];
         const paperByTicker = new Map((paper.positions || []).map(p => [String(p.ticker || "").toUpperCase(), p]));
 
         if (!ibkr.enabled || !ibkr.ok) {
@@ -972,17 +979,26 @@
           return;
         }
 
+        const summaryUnrealized = asNumber(summary.UnrealizedPnL, NaN);
+        const summaryRealized = asNumber(summary.RealizedPnL, NaN);
+        const positionsUnrealized = positions.reduce((acc, p) => {
+          const v = asNumber(p.unrealized_pnl, NaN);
+          return Number.isFinite(v) ? acc + v : acc;
+        }, 0);
+        const totalPnl = (Number.isFinite(summaryUnrealized) || Number.isFinite(summaryRealized))
+          ? (asNumber(summaryUnrealized, 0) + asNumber(summaryRealized, 0))
+          : positionsUnrealized;
+
         portfolioKpisEl.innerHTML = `
           <div class="kpi"><strong>Compte:</strong> ${escapeHtml(ibkr.account || "n/a")} | <strong>Latence:</strong> ${asNumber(ibkr.latency_ms, 0)} ms</div>
           <div class="kpi-line">
             <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${fmtMoney(summary.NetLiquidation, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">Liquidités</div><div class="k-val">${fmtMoney(summary.TotalCashValue, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">Capital géré</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
-            <div class="kpi-card"><div class="k-label">P/L latent</div><div class="k-val ${pnlClass(summary.UnrealizedPnL)}">${fmtSigned(summary.UnrealizedPnL)} ${currency}</div></div>
+            <div class="kpi-card"><div class="k-label">P/L total</div><div class="k-val ${pnlClass(totalPnl)}">${fmtSignedMoney(totalPnl, currency)}</div></div>
           </div>
         `;
 
-        const positions = ibkr.positions || [];
         if (!positions.length) {
           portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position ouverte.</td></tr>";
         } else {
@@ -997,7 +1013,7 @@
             const marketPrice = asNumber(pos.market_price, NaN);
             const unrealized = asNumber(pos.unrealized_pnl, NaN);
             const displayName = symbol || "n/a";
-            const valueFallback = Number.isFinite(marketPrice)
+            const valueFallback = (Number.isFinite(marketPrice) && marketPrice > 0)
               ? marketPrice * qty
               : (Number.isFinite(avgCost) ? avgCost * qty : NaN);
             const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
@@ -1011,7 +1027,7 @@
                 <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
                 <td>${Number.isFinite(entry) ? entry.toFixed(2) : (Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a")}</td>
                 <td>${Number.isFinite(displayValue) ? fmtMoney(displayValue, currency) : "n/a"}</td>
-                <td class="${pnlClass(unrealized)}">${fmtSigned(unrealized)} ${currency}</td>
+                <td class="${pnlClass(unrealized)}">${fmtSignedMoney(unrealized, currency)}</td>
               </tr>
             `;
           }).join("");
