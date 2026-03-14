@@ -9,6 +9,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -706,35 +708,69 @@ def _check_reddit() -> dict[str, Any]:
 
 def _check_stocktwits() -> dict[str, Any]:
     probe_url = f"{STOCKTWITS_BASE_URL}/streams/symbol/{STOCKTWITS_TEST_SYMBOL}.json"
-    status, payload, err, latency = _http_get_json(
+    started = time.perf_counter()
+    req = urllib.request.Request(
         probe_url,
-        timeout_s=4.0,
+        headers={
+            "User-Agent": "Bubo/1.0 connectivity-check",
+            "Accept": "application/json",
+        },
     )
-    if err:
-        return _service_row("stocktwits", "Stocktwits", "warning", f"Erreur reseau: {err}", latency_ms=latency)
-    if status == 200 and isinstance(payload, dict):
-        return _service_row(
-            "stocktwits",
-            "Stocktwits",
-            "ok",
-            f"Flux public OK ({STOCKTWITS_TEST_SYMBOL})",
-            latency_ms=latency,
-            details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
-        )
-    if status == 429:
+
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            status = int(getattr(resp, "status", 200) or 200)
+            body = resp.read()
+    except urllib.error.HTTPError as e:
+        latency = int((time.perf_counter() - started) * 1000)
+        status = int(getattr(e, "code", 0) or 0)
+        if status == 429:
+            return _service_row(
+                "stocktwits",
+                "Stocktwits",
+                "warning",
+                f"Rate limit (HTTP 429) sur {STOCKTWITS_TEST_SYMBOL}",
+                latency_ms=latency,
+                details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
+            )
         return _service_row(
             "stocktwits",
             "Stocktwits",
             "warning",
-            f"Rate limit (HTTP 429) sur {STOCKTWITS_TEST_SYMBOL}",
+            f"HTTP {status} ({STOCKTWITS_TEST_SYMBOL})",
             latency_ms=latency,
             details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
         )
+    except Exception as e:
+        latency = int((time.perf_counter() - started) * 1000)
+        return _service_row("stocktwits", "Stocktwits", "warning", f"Erreur reseau: {e}", latency_ms=latency)
+
+    latency = int((time.perf_counter() - started) * 1000)
+    payload: dict[str, Any] | None = None
+    try:
+        decoded = json.loads(body.decode("utf-8"))
+        if isinstance(decoded, dict):
+            payload = decoded
+    except Exception:
+        payload = None
+
+    if status == 200 and isinstance(payload, dict):
+        count = payload.get("messages", [])
+        messages_count = len(count) if isinstance(count, list) else 0
+        return _service_row(
+            "stocktwits",
+            "Stocktwits",
+            "ok",
+            f"Flux public OK ({STOCKTWITS_TEST_SYMBOL}, {messages_count} msgs)",
+            latency_ms=latency,
+            details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
+        )
+
     return _service_row(
         "stocktwits",
         "Stocktwits",
         "warning",
-        f"HTTP {status} ({STOCKTWITS_TEST_SYMBOL})",
+        f"Reponse non-JSON (HTTP {status}) sur {STOCKTWITS_TEST_SYMBOL}",
         latency_ms=latency,
         details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
     )
