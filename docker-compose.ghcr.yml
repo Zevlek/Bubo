@@ -84,7 +84,9 @@ services:
     profiles: ["autoupdate"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_CONFIG_FILE:-/root/.docker/config.json}:/config.json:ro
     command:
+      - "--registry-auth"
       - "--interval"
       - "300"
       - "bubo-web"

@@ -276,6 +276,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `TZ` | Fuseau horaire du container | Non | Ex: `Europe/Paris`, `UTC` | `Europe/Paris` |
 | `INSTALL_AI_DEPS` | Installe les deps IA lourdes optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers/praw) | `0` |
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
+| `DOCKER_CONFIG_FILE` | Fichier `config.json` Docker utilise par Watchtower pour l'auth registry | Requis si image privee (GHCR) | Chemin absolu vers `config.json` (ex: `/root/.docker/config.json`) | `/root/.docker/config.json` |
 | `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
 | `BUBO_CONNECTIVITY_CACHE_TTL_S` | Cache du diagnostic connectivite API/IBKR dans l'UI | Non | Entier `>= 10` secondes | `120` |
 | `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` | Cache du snapshot portefeuille/compte IBKR dans l'UI | Non | Entier `>= 10` secondes | `60` |
@@ -382,6 +383,26 @@ Le service `watchtower` est dans `docker-compose.ghcr.yml` (profile `autoupdate`
 
 ```bash
 docker compose -f docker-compose.ghcr.yml --profile autoupdate up -d
+```
+
+Checklist minimale pour que Watchtower fonctionne:
+
+1. Etre connecte a GHCR sur la machine hote:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <ton_user_github> --password-stdin
+```
+
+2. Verifier/adapter dans `.env`:
+
+```env
+DOCKER_CONFIG_FILE=/root/.docker/config.json
+```
+
+3. Verifier les logs Watchtower:
+
+```bash
+docker logs -f bubo-watchtower
 ```
 
 ## Tests
