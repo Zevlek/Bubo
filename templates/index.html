@@ -197,6 +197,90 @@
       line-height: 1.3;
     }
 
+    .connectivity {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid #d7e1e8;
+      border-radius: 10px;
+      background: #f7fbff;
+    }
+
+    .connectivity-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .conn-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 9px;
+      border: 1px solid #deebf3;
+      border-radius: 9px;
+      background: #ffffff;
+    }
+
+    .conn-main {
+      min-width: 0;
+    }
+
+    .conn-label {
+      font-size: 0.86rem;
+      font-weight: 600;
+      color: #1f3c4d;
+    }
+
+    .conn-msg {
+      margin-top: 2px;
+      color: #466173;
+      font-size: 0.78rem;
+      line-height: 1.25;
+      word-break: break-word;
+    }
+
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .badge.ok {
+      background: #e8f7ee;
+      border-color: #bfe4cb;
+      color: #1c6e3d;
+    }
+
+    .badge.warning {
+      background: #fff6e7;
+      border-color: #f3d39a;
+      color: #7f5600;
+    }
+
+    .badge.error {
+      background: #fdecea;
+      border-color: #efc0b8;
+      color: #8d2f22;
+    }
+
+    .badge.disabled {
+      background: #edf1f5;
+      border-color: #d6dde5;
+      color: #5e707f;
+    }
+
+    .conn-refresh {
+      margin-top: 8px;
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+    }
+
     .toolbar {
       display: flex;
       justify-content: space-between;
@@ -304,6 +388,23 @@
           <strong id="run-state">Idle</strong>
         </div>
         <div id="status-details" class="hint">Timezone: {{ timezone }}</div>
+
+        <div class="connectivity">
+          <div class="toolbar" style="margin-bottom: 0;">
+            <h2 style="margin: 0; font-size: 0.92rem;">Connectivite API</h2>
+            <small id="conn-meta">Chargement...</small>
+          </div>
+          <div id="connectivity-list" class="connectivity-list">
+            <div class="conn-item">
+              <div class="conn-main">
+                <div class="conn-label">Diagnostic</div>
+                <div class="conn-msg">Initialisation...</div>
+              </div>
+              <span class="badge disabled">N/A</span>
+            </div>
+          </div>
+          <button class="btn-soft conn-refresh" id="btn-connectivity" type="button">Tester maintenant</button>
+        </div>
 
         <label class="label" for="universe_file">Universe file</label>
         <input id="universe_file" type="text" value="{{ defaults.universe_file }}">
@@ -434,6 +535,9 @@
     const runStateEl = document.getElementById("run-state");
     const statusDetailsEl = document.getElementById("status-details");
     const messageBoxEl = document.getElementById("message-box");
+    const connectivityListEl = document.getElementById("connectivity-list");
+    const connectivityMetaEl = document.getElementById("conn-meta");
+    let lastConnectivityRefreshEpoch = 0;
 
     function configPayload() {
       return {
@@ -462,6 +566,22 @@
       messageBoxEl.style.borderColor = error ? "#efb0a8" : "#d1dbe3";
       messageBoxEl.style.background = error ? "#fce9e6" : "#eff3f7";
       messageBoxEl.style.color = error ? "#8a2f23" : "#234052";
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function connectivityBadgeLabel(state) {
+      if (state === "ok") return "OK";
+      if (state === "error") return "ERREUR";
+      if (state === "warning") return "ATTENTION";
+      return "N/A";
     }
 
     async function callAction(endpoint) {
@@ -540,14 +660,81 @@
       `).join("");
     }
 
+    async function refreshConnectivity(force = false) {
+      try {
+        const suffix = force ? "?force=1" : "";
+        const res = await fetch(`/api/connectivity${suffix}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(configPayload())
+        });
+        const data = await res.json();
+        const services = data.services || [];
+
+        if (!services.length) {
+          connectivityListEl.innerHTML = `
+            <div class="conn-item">
+              <div class="conn-main">
+                <div class="conn-label">Aucun resultat</div>
+                <div class="conn-msg">Le diagnostic n'a retourne aucun service.</div>
+              </div>
+              <span class="badge warning">ATTENTION</span>
+            </div>
+          `;
+          connectivityMetaEl.textContent = "Aucune donnee";
+          return;
+        }
+
+        connectivityListEl.innerHTML = services.map(s => {
+          const state = String(s.state || "warning");
+          const requiredTag = s.required ? "requis" : "optionnel";
+          const latency = Number.isFinite(s.latency_ms) ? ` | ${s.latency_ms} ms` : "";
+          return `
+            <div class="conn-item">
+              <div class="conn-main">
+                <div class="conn-label">${escapeHtml(s.label)} <small style="color:#6a7f8e;font-weight:500;">(${requiredTag})</small></div>
+                <div class="conn-msg">${escapeHtml(s.message)}${latency}</div>
+              </div>
+              <span class="badge ${state}">${connectivityBadgeLabel(state)}</span>
+            </div>
+          `;
+        }).join("");
+
+        const mode = data.cached ? `cache ${data.cache_age_s || 0}s` : "live";
+        const stamp = data.generated_at ? ` | ${data.generated_at}` : "";
+        const ttl = Number.isFinite(data.ttl_s) ? ` | TTL ${data.ttl_s}s` : "";
+        const summary = data.summary || {};
+        const counts = `ok:${summary.ok || 0} warn:${summary.warning || 0} err:${summary.error || 0}`;
+        connectivityMetaEl.textContent = `${counts} | ${mode}${ttl}${stamp}`;
+      } catch (err) {
+        connectivityListEl.innerHTML = `
+          <div class="conn-item">
+            <div class="conn-main">
+              <div class="conn-label">Diagnostic indisponible</div>
+              <div class="conn-msg">${escapeHtml(err)}</div>
+            </div>
+            <span class="badge error">ERREUR</span>
+          </div>
+        `;
+        connectivityMetaEl.textContent = "Erreur";
+      }
+    }
+
     async function refreshAll() {
-      await Promise.all([refreshStatus(), refreshLogs(), refreshFiles()]);
+      const tasks = [refreshStatus(), refreshLogs(), refreshFiles()];
+      const now = Date.now();
+      if (now - lastConnectivityRefreshEpoch >= 15000) {
+        tasks.push(refreshConnectivity(false));
+        lastConnectivityRefreshEpoch = now;
+      }
+      await Promise.all(tasks);
     }
 
     document.getElementById("btn-watch").addEventListener("click", () => callAction("/api/start-watch"));
     document.getElementById("btn-once").addEventListener("click", () => callAction("/api/run-once"));
     document.getElementById("btn-screen").addEventListener("click", () => callAction("/api/screen-only"));
     document.getElementById("btn-stop").addEventListener("click", stopProcess);
+    document.getElementById("btn-connectivity").addEventListener("click", () => refreshConnectivity(true));
 
     refreshAll();
     setInterval(refreshAll, 3500);

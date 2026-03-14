@@ -54,6 +54,7 @@ Tous les endpoints UI/API (sauf `/health`) sont proteges par login.
 - `Run Once`: cycle complet unique.
 - `Screen Only`: preselction uniquement.
 - `Stop`: arret du process en cours.
+- `Connectivite API`: etat Gemini/NewsAPI/Finnhub/Reddit/Stocktwits + IB Gateway (bouton `Tester maintenant`).
 - Logs live + telechargement des exports `data/` et `charts/`.
 
 ## 5) Deploiement GitHub (image pull sur NAS)

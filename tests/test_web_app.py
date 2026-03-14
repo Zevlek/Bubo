@@ -1,10 +1,12 @@
 import unittest
+from unittest.mock import patch
 
 try:
-    from web_app import build_engine_command
+    from web_app import build_engine_command, get_connectivity_report
 except ModuleNotFoundError as exc:
     if exc.name == "flask":
         build_engine_command = None
+        get_connectivity_report = None
     else:
         raise
 
@@ -91,6 +93,64 @@ class WebAppTests(unittest.TestCase):
     def test_invalid_mode_raises(self):
         with self.assertRaises(ValueError):
             build_engine_command("invalid-mode", {})
+
+    @patch("web_app._compute_connectivity_report")
+    def test_connectivity_report_uses_cache(self, compute_mock):
+        compute_mock.return_value = {
+            "generated_at": "2026-03-14 10:00:00",
+            "ttl_s": 120,
+            "services": [],
+            "summary": {"ok": 0, "warning": 0, "error": 0, "disabled": 0},
+        }
+
+        cfg = {
+            "decision_engine": "llm",
+            "paper_enabled": True,
+            "paper_broker": "ibkr",
+            "ibkr_host": "ib-gateway",
+            "ibkr_port": 4004,
+            "ibkr_client_id": 42,
+        }
+
+        first = get_connectivity_report(cfg, force=True)
+        second = get_connectivity_report(cfg, force=False)
+
+        self.assertFalse(first["cached"])
+        self.assertTrue(second["cached"])
+        self.assertEqual(compute_mock.call_count, 1)
+
+    @patch("web_app._compute_connectivity_report")
+    def test_connectivity_report_force_bypasses_cache(self, compute_mock):
+        compute_mock.side_effect = [
+            {
+                "generated_at": "2026-03-14 10:00:00",
+                "ttl_s": 120,
+                "services": [],
+                "summary": {"ok": 0, "warning": 0, "error": 0, "disabled": 0},
+            },
+            {
+                "generated_at": "2026-03-14 10:00:01",
+                "ttl_s": 120,
+                "services": [],
+                "summary": {"ok": 0, "warning": 0, "error": 0, "disabled": 0},
+            },
+        ]
+
+        cfg = {
+            "decision_engine": "llm",
+            "paper_enabled": True,
+            "paper_broker": "ibkr",
+            "ibkr_host": "ib-gateway",
+            "ibkr_port": 4004,
+            "ibkr_client_id": 42,
+        }
+
+        first = get_connectivity_report(cfg, force=True)
+        second = get_connectivity_report(cfg, force=True)
+
+        self.assertFalse(first["cached"])
+        self.assertFalse(second["cached"])
+        self.assertEqual(compute_mock.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import argparse
 import hmac
+import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -10,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session, url_for
 
 
@@ -37,6 +40,18 @@ _RUN_STATE: dict[str, Any] = {
     "started_at": None,
     "last_exit_code": None,
     "last_finished_at": None,
+}
+
+try:
+    CONNECTIVITY_CACHE_TTL_S = max(10, int(os.getenv("BUBO_CONNECTIVITY_CACHE_TTL_S", "120")))
+except Exception:
+    CONNECTIVITY_CACHE_TTL_S = 120
+
+_CONNECTIVITY_CACHE_LOCK = threading.Lock()
+_CONNECTIVITY_CACHE: dict[str, Any] = {
+    "signature": "",
+    "timestamp": 0.0,
+    "report": None,
 }
 
 
@@ -96,6 +111,379 @@ def _coerce_float(value: Any, default: float, minimum: float | None = None) -> f
     if minimum is not None:
         parsed = max(minimum, parsed)
     return parsed
+
+
+def _first_env(*names: str) -> str:
+    for name in names:
+        raw = os.getenv(name, "")
+        val = str(raw or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _load_gemini_key_no_side_effect() -> str:
+    key = _first_env("GEMINI_API_KEY")
+    if key:
+        return key
+
+    cfg_path = BASE_DIR / "gemini_config.json"
+    if not cfg_path.exists():
+        return ""
+
+    try:
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    return str(payload.get("api_key", "") or "").strip()
+
+
+def _service_row(
+    service_id: str,
+    label: str,
+    state: str,
+    message: str,
+    *,
+    required: bool = False,
+    latency_ms: int | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": service_id,
+        "label": label,
+        "state": state,
+        "required": bool(required),
+        "message": str(message),
+        "latency_ms": latency_ms,
+        "details": details or {},
+    }
+
+
+def _http_get_json(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout_s: float = 4.0,
+) -> tuple[int, dict[str, Any] | None, str | None, int]:
+    started = time.perf_counter()
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=timeout_s)
+    except Exception as e:
+        elapsed = int((time.perf_counter() - started) * 1000)
+        return 0, None, str(e), elapsed
+
+    elapsed = int((time.perf_counter() - started) * 1000)
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = None
+    return int(resp.status_code), payload, None, elapsed
+
+
+def _check_gemini(decision_engine: str) -> dict[str, Any]:
+    required = decision_engine == "llm"
+    key = _load_gemini_key_no_side_effect()
+    if not key:
+        state = "error" if required else "warning"
+        msg = "GEMINI_API_KEY absent (LLM indisponible)" if required else "Cle Gemini non configuree"
+        return _service_row("gemini", "Gemini LLM", state, msg, required=required)
+
+    try:
+        from google import genai  # noqa: F401
+    except Exception as e:
+        state = "error" if required else "warning"
+        return _service_row("gemini", "Gemini LLM", state, f"google-genai indisponible: {e}", required=required)
+
+    status, payload, err, latency = _http_get_json(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        params={"key": key},
+        timeout_s=4.0,
+    )
+    if err:
+        return _service_row("gemini", "Gemini LLM", "error", f"Erreur reseau: {err}", required=required, latency_ms=latency)
+
+    if status == 200 and isinstance(payload, dict):
+        models = payload.get("models", []) if isinstance(payload.get("models", []), list) else []
+        return _service_row(
+            "gemini",
+            "Gemini LLM",
+            "ok",
+            f"Connexion OK ({len(models)} modeles visibles)",
+            required=required,
+            latency_ms=latency,
+        )
+
+    message = ""
+    if isinstance(payload, dict):
+        message = (
+            str(payload.get("error", {}).get("message", "")).strip()
+            or str(payload.get("message", "")).strip()
+        )
+    if not message:
+        message = f"HTTP {status}"
+    return _service_row("gemini", "Gemini LLM", "error", message, required=required, latency_ms=latency)
+
+
+def _check_newsapi() -> dict[str, Any]:
+    key = _first_env("NEWSAPI_KEY", "BUBO_NEWSAPI_KEY")
+    if not key:
+        return _service_row("newsapi", "NewsAPI", "warning", "Cle non configuree", required=False)
+
+    status, payload, err, latency = _http_get_json(
+        "https://newsapi.org/v2/everything",
+        params={"q": "market", "pageSize": 1, "language": "en", "apiKey": key},
+        timeout_s=4.0,
+    )
+    if err:
+        return _service_row("newsapi", "NewsAPI", "error", f"Erreur reseau: {err}", latency_ms=latency)
+
+    if status == 200 and isinstance(payload, dict) and str(payload.get("status", "")).lower() == "ok":
+        total = payload.get("totalResults")
+        msg = f"Connexion OK (totalResults={total})" if total is not None else "Connexion OK"
+        return _service_row("newsapi", "NewsAPI", "ok", msg, latency_ms=latency)
+
+    message = ""
+    if isinstance(payload, dict):
+        message = str(payload.get("message", "")).strip()
+    if not message:
+        message = f"HTTP {status}"
+    return _service_row("newsapi", "NewsAPI", "error", message, latency_ms=latency)
+
+
+def _check_finnhub() -> dict[str, Any]:
+    key = _first_env("FINNHUB_KEY", "BUBO_FINNHUB_KEY")
+    if not key:
+        return _service_row("finnhub", "Finnhub", "warning", "Cle non configuree", required=False)
+
+    status, payload, err, latency = _http_get_json(
+        "https://finnhub.io/api/v1/quote",
+        params={"symbol": "AAPL", "token": key},
+        timeout_s=4.0,
+    )
+    if err:
+        return _service_row("finnhub", "Finnhub", "error", f"Erreur reseau: {err}", latency_ms=latency)
+
+    if status == 200 and isinstance(payload, dict) and "c" in payload:
+        return _service_row("finnhub", "Finnhub", "ok", "Connexion OK", latency_ms=latency)
+
+    message = ""
+    if isinstance(payload, dict):
+        message = str(payload.get("error", "")).strip()
+    if not message:
+        message = f"HTTP {status}"
+    return _service_row("finnhub", "Finnhub", "error", message, latency_ms=latency)
+
+
+def _check_reddit() -> dict[str, Any]:
+    client_id = _first_env("BUBO_REDDIT_CLIENT_ID", "REDDIT_CLIENT_ID")
+    client_secret = _first_env("BUBO_REDDIT_CLIENT_SECRET", "REDDIT_CLIENT_SECRET")
+    user_agent = _first_env("BUBO_REDDIT_USER_AGENT", "REDDIT_USER_AGENT") or "Bubo/1.0 connectivity-check"
+
+    if client_id and client_secret:
+        try:
+            import praw  # type: ignore
+        except Exception as e:
+            return _service_row("reddit", "Reddit", "error", f"praw indisponible: {e}", required=False)
+
+        started = time.perf_counter()
+        try:
+            reddit = praw.Reddit(
+                client_id=client_id,
+                client_secret=client_secret,
+                user_agent=user_agent,
+            )
+            _ = reddit.subreddit("stocks").display_name
+            latency = int((time.perf_counter() - started) * 1000)
+            return _service_row("reddit", "Reddit", "ok", "OAuth Reddit OK", latency_ms=latency)
+        except Exception as e:
+            latency = int((time.perf_counter() - started) * 1000)
+            return _service_row("reddit", "Reddit", "error", f"OAuth echec: {e}", latency_ms=latency)
+
+    status, _payload, err, latency = _http_get_json(
+        "https://www.reddit.com/r/stocks/about.json",
+        headers={"User-Agent": user_agent},
+        timeout_s=4.0,
+    )
+    if err:
+        return _service_row("reddit", "Reddit", "warning", f"Mode public indisponible: {err}", latency_ms=latency)
+    if status == 200:
+        return _service_row("reddit", "Reddit", "warning", "OAuth non configuree (fallback public actif)", latency_ms=latency)
+    if status == 429:
+        return _service_row("reddit", "Reddit", "warning", "Rate limit Reddit (HTTP 429)", latency_ms=latency)
+    return _service_row("reddit", "Reddit", "warning", f"OAuth non configuree, fallback HTTP {status}", latency_ms=latency)
+
+
+def _check_stocktwits() -> dict[str, Any]:
+    status, payload, err, latency = _http_get_json(
+        "https://api.stocktwits.com/api/2/streams/symbol/AAPL.json",
+        timeout_s=4.0,
+    )
+    if err:
+        return _service_row("stocktwits", "Stocktwits", "warning", f"Erreur reseau: {err}", latency_ms=latency)
+    if status == 200 and isinstance(payload, dict):
+        return _service_row("stocktwits", "Stocktwits", "ok", "Flux public OK", latency_ms=latency)
+    if status == 429:
+        return _service_row("stocktwits", "Stocktwits", "warning", "Rate limit (HTTP 429)", latency_ms=latency)
+    return _service_row("stocktwits", "Stocktwits", "warning", f"HTTP {status}", latency_ms=latency)
+
+
+def _ib_connect_probe(host: str, port: int, client_id: int) -> tuple[bool, str]:
+    try:
+        from ib_insync import IB  # type: ignore
+    except Exception as e:
+        return False, f"ib_insync indisponible: {e}"
+
+    ib = IB()
+    try:
+        probe_client_id = max(1, int(client_id) + 1000)
+        try:
+            ib.connect(host, port, clientId=probe_client_id, timeout=3, readonly=True)
+        except TypeError:
+            ib.connect(host, port, clientId=probe_client_id, timeout=3)
+        if not ib.isConnected():
+            return False, "Connexion etablie mais session IB non connectee"
+        try:
+            accounts = ib.managedAccounts() or []
+        except Exception:
+            accounts = []
+        if accounts:
+            return True, f"Session OK ({len(accounts)} compte(s))"
+        return True, "Session OK"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        try:
+            ib.disconnect()
+        except Exception:
+            pass
+
+
+def _check_ib_gateway(cfg: dict[str, Any]) -> dict[str, Any]:
+    required = bool(cfg.get("paper_enabled")) and str(cfg.get("paper_broker")) == "ibkr"
+    host = str(cfg.get("ibkr_host") or "").strip()
+    port = _coerce_int(cfg.get("ibkr_port"), 0, minimum=0)
+    client_id = _coerce_int(cfg.get("ibkr_client_id"), 42, minimum=1)
+
+    if not required:
+        return _service_row("ib_gateway", "IB Gateway", "disabled", "Broker paper local (non requis)", required=False)
+    if not host or port <= 0:
+        return _service_row("ib_gateway", "IB Gateway", "error", "Host/port IBKR invalides", required=True)
+
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=3.0):
+            pass
+    except Exception as e:
+        latency = int((time.perf_counter() - started) * 1000)
+        return _service_row(
+            "ib_gateway",
+            "IB Gateway",
+            "error",
+            f"Socket KO sur {host}:{port} ({e})",
+            required=True,
+            latency_ms=latency,
+        )
+
+    socket_latency = int((time.perf_counter() - started) * 1000)
+    ok, message = _ib_connect_probe(host, port, client_id)
+    state = "ok" if ok else "error"
+    return _service_row(
+        "ib_gateway",
+        "IB Gateway",
+        state,
+        message,
+        required=True,
+        latency_ms=socket_latency,
+        details={"host": host, "port": port},
+    )
+
+
+def _connectivity_signature(cfg: dict[str, Any]) -> str:
+    payload = {
+        "decision_engine": str(cfg.get("decision_engine", "")),
+        "paper_enabled": bool(cfg.get("paper_enabled")),
+        "paper_broker": str(cfg.get("paper_broker", "")),
+        "ibkr_host": str(cfg.get("ibkr_host", "")),
+        "ibkr_port": int(cfg.get("ibkr_port", 0) or 0),
+        "ibkr_client_id": int(cfg.get("ibkr_client_id", 0) or 0),
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+def _compute_connectivity_report(cfg: dict[str, Any]) -> dict[str, Any]:
+    services = [
+        _check_gemini(str(cfg.get("decision_engine", "llm"))),
+        _check_newsapi(),
+        _check_finnhub(),
+        _check_reddit(),
+        _check_stocktwits(),
+        _check_ib_gateway(cfg),
+    ]
+
+    summary = {"ok": 0, "warning": 0, "error": 0, "disabled": 0}
+    for row in services:
+        state = str(row.get("state", "warning"))
+        if state not in summary:
+            state = "warning"
+        summary[state] += 1
+
+    return {
+        "generated_at": _now_text(),
+        "ttl_s": CONNECTIVITY_CACHE_TTL_S,
+        "services": services,
+        "summary": summary,
+    }
+
+
+def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool = False) -> dict[str, Any]:
+    cfg = _sanitize_config(overrides)
+    signature = _connectivity_signature(cfg)
+    now = time.time()
+
+    with _CONNECTIVITY_CACHE_LOCK:
+        cached = _CONNECTIVITY_CACHE.get("report")
+        cached_sig = _CONNECTIVITY_CACHE.get("signature")
+        cached_ts = float(_CONNECTIVITY_CACHE.get("timestamp") or 0.0)
+        age_s = int(now - cached_ts) if cached_ts else 0
+        cache_valid = (
+            not force
+            and cached is not None
+            and cached_sig == signature
+            and age_s < CONNECTIVITY_CACHE_TTL_S
+        )
+        if cache_valid:
+            return {
+                **cached,
+                "cached": True,
+                "cache_age_s": age_s,
+                "config": {
+                    "decision_engine": cfg.get("decision_engine"),
+                    "paper_enabled": cfg.get("paper_enabled"),
+                    "paper_broker": cfg.get("paper_broker"),
+                    "ibkr_host": cfg.get("ibkr_host"),
+                    "ibkr_port": cfg.get("ibkr_port"),
+                },
+            }
+
+    report = _compute_connectivity_report(cfg)
+    with _CONNECTIVITY_CACHE_LOCK:
+        _CONNECTIVITY_CACHE["signature"] = signature
+        _CONNECTIVITY_CACHE["timestamp"] = now
+        _CONNECTIVITY_CACHE["report"] = report
+
+    return {
+        **report,
+        "cached": False,
+        "cache_age_s": 0,
+        "config": {
+            "decision_engine": cfg.get("decision_engine"),
+            "paper_enabled": cfg.get("paper_enabled"),
+            "paper_broker": cfg.get("paper_broker"),
+            "ibkr_host": cfg.get("ibkr_host"),
+            "ibkr_port": cfg.get("ibkr_port"),
+        },
+    }
 
 
 def get_default_config() -> dict[str, Any]:
@@ -414,6 +802,14 @@ def api_logs():
 def api_files():
     limit = _coerce_int(request.args.get("limit", 40), 40, minimum=5)
     return jsonify({"files": list_output_files(limit=limit)})
+
+
+@app.route("/api/connectivity", methods=["GET", "POST"])
+def api_connectivity():
+    payload = _parse_payload() if request.method == "POST" else {}
+    force = _coerce_bool(request.args.get("force"), False) or _coerce_bool(payload.get("force"), False)
+    report = get_connectivity_report(payload, force=force)
+    return jsonify(report)
 
 
 @app.get("/api/download/<scope>/<path:rel_path>")
