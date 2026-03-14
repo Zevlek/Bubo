@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import hmac
 import json
 import os
@@ -360,6 +361,12 @@ def _check_stocktwits() -> dict[str, Any]:
 
 
 def _ib_connect_probe(host: str, port: int, client_id: int) -> tuple[bool, str]:
+    # ib_insync requires an asyncio loop bound to the current thread.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     try:
         from ib_insync import IB  # type: ignore
     except Exception as e:
