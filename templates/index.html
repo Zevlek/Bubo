@@ -294,6 +294,26 @@
       font-size: 0.82rem;
     }
 
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .toolbar-right label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toolbar-right input[type="checkbox"] {
+      margin: 0;
+    }
+
     #logs {
       width: 100%;
       min-height: 360px;
@@ -357,9 +377,48 @@
       align-items: center;
     }
 
+    .portfolio-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .subcard {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fcfeff;
+    }
+
+    .subcard h3 {
+      margin: 0 0 8px;
+      font-size: 0.9rem;
+      color: #1f3c4d;
+    }
+
+    .kpi {
+      font-size: 0.82rem;
+      color: #36586a;
+      margin: 4px 0;
+    }
+
+    .kpi strong {
+      color: #132f40;
+    }
+
+    .table-wrap h3 {
+      margin: 0;
+      padding: 8px 10px;
+      background: #f3f7fa;
+      border-bottom: 1px solid #e3e9ee;
+      font-size: 0.82rem;
+      color: #29485a;
+    }
+
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
       #logs { min-height: 280px; max-height: 280px; }
+      .portfolio-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -498,11 +557,108 @@
       <section class="card">
         <div class="toolbar">
           <h2>Logs Live</h2>
-          <small id="log-meta">tail 300</small>
+          <div class="toolbar-right">
+            <small id="log-meta">tail 300</small>
+            <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+          </div>
         </div>
         <pre id="logs"></pre>
       </section>
     </div>
+
+    <section class="card" style="margin-top: 16px;">
+      <div class="toolbar">
+        <h2>Portefeuille & Broker</h2>
+        <div class="toolbar-right">
+          <small id="portfolio-meta">Chargement...</small>
+          <button class="btn-soft" id="btn-portfolio" type="button" style="padding:6px 10px;">Refresh</button>
+        </div>
+      </div>
+      <div class="portfolio-grid">
+        <div class="subcard">
+          <h3>Paper (BUBO)</h3>
+          <div id="paper-kpis">
+            <div class="kpi">Chargement...</div>
+          </div>
+          <div class="table-wrap" style="margin-top:8px;">
+            <h3>Positions ouvertes</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Qty</th>
+                  <th>Entry</th>
+                  <th>Last</th>
+                  <th>U.PnL</th>
+                </tr>
+              </thead>
+              <tbody id="paper-pos-body">
+                <tr><td colspan="5">Chargement...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrap" style="margin-top:8px;">
+            <h3>Trades fermes (avec frais)</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Ticker</th>
+                  <th>Shares</th>
+                  <th>PnL</th>
+                  <th>Fees</th>
+                </tr>
+              </thead>
+              <tbody id="paper-trades-body">
+                <tr><td colspan="5">Chargement...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="subcard">
+          <h3>IBKR (snapshot live)</h3>
+          <div id="ibkr-kpis">
+            <div class="kpi">Chargement...</div>
+          </div>
+          <div class="table-wrap" style="margin-top:8px;">
+            <h3>Positions IBKR</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbole</th>
+                  <th>Qty</th>
+                  <th>Avg Cost</th>
+                  <th>Mkt Value</th>
+                  <th>U.PnL</th>
+                </tr>
+              </thead>
+              <tbody id="ibkr-pos-body">
+                <tr><td colspan="5">Chargement...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-wrap" style="margin-top:8px;">
+            <h3>Executions recentes (commissions)</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbole</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Prix</th>
+                  <th>Commission</th>
+                </tr>
+              </thead>
+              <tbody id="ibkr-exec-body">
+                <tr><td colspan="6">Chargement...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section class="card" style="margin-top: 16px;">
       <div class="toolbar">
@@ -535,9 +691,18 @@
     const runStateEl = document.getElementById("run-state");
     const statusDetailsEl = document.getElementById("status-details");
     const messageBoxEl = document.getElementById("message-box");
+    const logAutoScrollEl = document.getElementById("log-autoscroll");
     const connectivityListEl = document.getElementById("connectivity-list");
     const connectivityMetaEl = document.getElementById("conn-meta");
+    const portfolioMetaEl = document.getElementById("portfolio-meta");
+    const paperKpisEl = document.getElementById("paper-kpis");
+    const paperPosBodyEl = document.getElementById("paper-pos-body");
+    const paperTradesBodyEl = document.getElementById("paper-trades-body");
+    const ibkrKpisEl = document.getElementById("ibkr-kpis");
+    const ibkrPosBodyEl = document.getElementById("ibkr-pos-body");
+    const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
     let lastConnectivityRefreshEpoch = 0;
+    let lastPortfolioRefreshEpoch = 0;
 
     function configPayload() {
       return {
@@ -575,6 +740,23 @@
         .replaceAll(">", "&gt;")
         .replaceAll("\"", "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    function asNumber(value, fallback = 0) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    }
+
+    function fmtMoney(value, currency = "USD") {
+      const n = asNumber(value, NaN);
+      if (!Number.isFinite(n)) return "n/a";
+      return `${n.toFixed(2)} ${currency}`;
+    }
+
+    function fmtSigned(value, digits = 2) {
+      const n = asNumber(value, NaN);
+      if (!Number.isFinite(n)) return "n/a";
+      return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}`;
     }
 
     function connectivityBadgeLabel(state) {
@@ -635,8 +817,32 @@
     async function refreshLogs() {
       const res = await fetch("/api/logs?tail=300");
       const data = await res.json();
-      logsEl.textContent = (data.lines || []).join("\n");
-      logsEl.scrollTop = logsEl.scrollHeight;
+      const nextText = (data.lines || []).join("\n");
+      const prevTop = logsEl.scrollTop;
+      const maxTop = Math.max(0, logsEl.scrollHeight - logsEl.clientHeight);
+      const wasNearBottom = (maxTop - prevTop) < 16;
+      const selection = window.getSelection ? window.getSelection() : null;
+      const hasSelectionInLogs = Boolean(
+        selection &&
+        selection.rangeCount > 0 &&
+        selection.anchorNode &&
+        logsEl.contains(selection.anchorNode)
+      );
+
+      if (hasSelectionInLogs) {
+        document.getElementById("log-meta").textContent = `tail ${data.count || 0} | selection active`;
+        return;
+      }
+
+      if (logsEl.textContent !== nextText) {
+        logsEl.textContent = nextText;
+      }
+
+      if (logAutoScrollEl.checked && wasNearBottom) {
+        logsEl.scrollTop = logsEl.scrollHeight;
+      } else {
+        logsEl.scrollTop = prevTop;
+      }
       document.getElementById("log-meta").textContent = `tail ${data.count || 0}`;
     }
 
@@ -720,12 +926,133 @@
       }
     }
 
+    async function refreshPortfolio(force = false) {
+      try {
+        const suffix = force ? "?force=1" : "";
+        const res = await fetch(`/api/portfolio${suffix}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(configPayload())
+        });
+        const data = await res.json();
+
+        const paper = data.paper || {};
+        const ibkr = data.ibkr || {};
+        const currency = (ibkr.currency || "USD");
+
+        paperKpisEl.innerHTML = `
+          <div class="kpi"><strong>Broker:</strong> ${escapeHtml(paper.broker || "n/a")}</div>
+          <div class="kpi"><strong>Equity:</strong> ${fmtMoney(paper.equity, currency)} | <strong>Cash:</strong> ${fmtMoney(paper.cash, currency)}</div>
+          <div class="kpi"><strong>Realized:</strong> ${fmtSigned(paper.realized_pnl)} | <strong>Positions:</strong> ${asNumber(paper.positions_count, 0)}</div>
+          <div class="kpi"><strong>Closed trades:</strong> ${asNumber(paper.closed_trades_count, 0)} | <strong>Cycles:</strong> ${asNumber(paper.cycles, 0)}</div>
+        `;
+
+        const paperPositions = paper.positions || [];
+        if (!paperPositions.length) {
+          paperPosBodyEl.innerHTML = "<tr><td colspan='5'>Aucune position ouverte.</td></tr>";
+        } else {
+          paperPosBodyEl.innerHTML = paperPositions.slice(0, 30).map(p => `
+            <tr>
+              <td>${escapeHtml(p.ticker)}</td>
+              <td>${asNumber(p.shares, 0)}</td>
+              <td>${asNumber(p.entry_price, 0).toFixed(2)}</td>
+              <td>${asNumber(p.last_price, 0).toFixed(2)}</td>
+              <td>${fmtSigned(p.unrealized_pnl)}</td>
+            </tr>
+          `).join("");
+        }
+
+        const paperTrades = (paper.closed_trades_csv && paper.closed_trades_csv.length ? paper.closed_trades_csv : paper.closed_trades) || [];
+        if (!paperTrades.length) {
+          paperTradesBodyEl.innerHTML = "<tr><td colspan='5'>Aucun trade ferme.</td></tr>";
+        } else {
+          paperTradesBodyEl.innerHTML = paperTrades.slice(0, 40).map(t => {
+            const entryFee = asNumber(t.entry_fee, 0);
+            const exitFee = asNumber(t.exit_fee, 0);
+            const totalFee = entryFee + exitFee;
+            const date = t.exit_date || t.entry_date || t.timestamp || "";
+            return `
+              <tr>
+                <td>${escapeHtml(date)}</td>
+                <td>${escapeHtml(t.ticker || "")}</td>
+                <td>${asNumber(t.shares, 0)}</td>
+                <td>${fmtSigned(t.pnl)}</td>
+                <td>${totalFee.toFixed(2)}</td>
+              </tr>
+            `;
+          }).join("");
+        }
+
+        if (!ibkr.enabled) {
+          ibkrKpisEl.innerHTML = "<div class='kpi'>IBKR non actif (paper broker local).</div>";
+          ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>IBKR non actif.</td></tr>";
+          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>IBKR non actif.</td></tr>";
+        } else if (!ibkr.ok) {
+          ibkrKpisEl.innerHTML = `<div class='kpi'><strong>Erreur:</strong> ${escapeHtml(ibkr.message || "Snapshot indisponible")}</div>`;
+          ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>Snapshot indisponible.</td></tr>";
+          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Snapshot indisponible.</td></tr>";
+        } else {
+          const s = ibkr.account_summary || {};
+          const cc = ibkr.currency || "USD";
+          ibkrKpisEl.innerHTML = `
+            <div class="kpi"><strong>Compte:</strong> ${escapeHtml(ibkr.account || "n/a")} | <strong>Latency:</strong> ${asNumber(ibkr.latency_ms, 0)} ms</div>
+            <div class="kpi"><strong>NetLiq:</strong> ${fmtMoney(s.NetLiquidation, cc)} | <strong>Cash:</strong> ${fmtMoney(s.TotalCashValue, cc)}</div>
+            <div class="kpi"><strong>BuyingPower:</strong> ${fmtMoney(s.BuyingPower, cc)} | <strong>AvailFunds:</strong> ${fmtMoney(s.AvailableFunds, cc)}</div>
+            <div class="kpi"><strong>RealizedPnL:</strong> ${fmtSigned(s.RealizedPnL)} | <strong>UnrealizedPnL:</strong> ${fmtSigned(s.UnrealizedPnL)}</div>
+            <div class="kpi"><strong>Commissions (exec list):</strong> ${fmtMoney(ibkr.total_commission, ibkr.total_commission_currency || cc)}</div>
+          `;
+
+          const ibkrPositions = ibkr.positions || [];
+          if (!ibkrPositions.length) {
+            ibkrPosBodyEl.innerHTML = "<tr><td colspan='5'>Aucune position IBKR ouverte.</td></tr>";
+          } else {
+            ibkrPosBodyEl.innerHTML = ibkrPositions.slice(0, 40).map(p => `
+              <tr>
+                <td>${escapeHtml(p.symbol || "")}</td>
+                <td>${asNumber(p.quantity, 0)}</td>
+                <td>${asNumber(p.avg_cost, 0).toFixed(2)}</td>
+                <td>${Number.isFinite(asNumber(p.market_value, NaN)) ? asNumber(p.market_value, 0).toFixed(2) : "n/a"}</td>
+                <td>${fmtSigned(p.unrealized_pnl)}</td>
+              </tr>
+            `).join("");
+          }
+
+          const executions = ibkr.executions || [];
+          if (!executions.length) {
+            ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Aucune execution recente.</td></tr>";
+          } else {
+            ibkrExecBodyEl.innerHTML = executions.slice(0, 60).map(e => `
+              <tr>
+                <td>${escapeHtml(e.time || "")}</td>
+                <td>${escapeHtml(e.symbol || "")}</td>
+                <td>${escapeHtml(e.side || "")}</td>
+                <td>${asNumber(e.shares, 0)}</td>
+                <td>${asNumber(e.price, 0).toFixed(4)}</td>
+                <td>${asNumber(e.commission, 0).toFixed(2)} ${escapeHtml(e.commission_currency || "")}</td>
+              </tr>
+            `).join("");
+          }
+        }
+
+        const mode = ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB live";
+        portfolioMetaEl.textContent = `${mode} | ${data.generated_at || ""}`;
+      } catch (err) {
+        portfolioMetaEl.textContent = "Erreur";
+        paperKpisEl.innerHTML = `<div class='kpi'><strong>Erreur:</strong> ${escapeHtml(err)}</div>`;
+        ibkrKpisEl.innerHTML = "<div class='kpi'>Snapshot indisponible.</div>";
+      }
+    }
+
     async function refreshAll() {
       const tasks = [refreshStatus(), refreshLogs(), refreshFiles()];
       const now = Date.now();
       if (now - lastConnectivityRefreshEpoch >= 15000) {
         tasks.push(refreshConnectivity(false));
         lastConnectivityRefreshEpoch = now;
+      }
+      if (now - lastPortfolioRefreshEpoch >= 15000) {
+        tasks.push(refreshPortfolio(false));
+        lastPortfolioRefreshEpoch = now;
       }
       await Promise.all(tasks);
     }
@@ -735,6 +1062,18 @@
     document.getElementById("btn-screen").addEventListener("click", () => callAction("/api/screen-only"));
     document.getElementById("btn-stop").addEventListener("click", stopProcess);
     document.getElementById("btn-connectivity").addEventListener("click", () => refreshConnectivity(true));
+    document.getElementById("btn-portfolio").addEventListener("click", () => refreshPortfolio(true));
+    logsEl.addEventListener("scroll", () => {
+      const distance = (logsEl.scrollHeight - logsEl.clientHeight) - logsEl.scrollTop;
+      if (distance > 16 && logAutoScrollEl.checked) {
+        logAutoScrollEl.checked = false;
+      }
+    });
+    logAutoScrollEl.addEventListener("change", () => {
+      if (logAutoScrollEl.checked) {
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
+    });
 
     refreshAll();
     setInterval(refreshAll, 3500);

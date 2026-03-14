@@ -24,6 +24,8 @@ Si tu utilises des APIs externes, configure aussi:
 - `BUBO_STOCKTWITS_BASE_URL` (social, optionnel)
 - `BUBO_STOCKTWITS_TEST_SYMBOL` (diagnostic UI, optionnel)
 - `BUBO_PAPER_WEBHOOK` (alertes paper)
+- `BUBO_CONNECTIVITY_CACHE_TTL_S` (cache diagnostic connectivite UI)
+- `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` (cache snapshot broker UI)
 
 ## 2) Lancer localement avec build
 
@@ -57,6 +59,7 @@ Tous les endpoints UI/API (sauf `/health`) sont proteges par login.
 - `Screen Only`: preselction uniquement.
 - `Stop`: arret du process en cours.
 - `Connectivite API`: etat Gemini/NewsAPI/Finnhub/Reddit/Stocktwits + IB Gateway (bouton `Tester maintenant`).
+- `Portefeuille & Broker`: equity/cash paper, positions ouvertes, historique trades (frais), snapshot IBKR (solde/positions/executions/commissions).
 - Logs live + telechargement des exports `data/` et `charts/`.
 
 ## 5) Deploiement GitHub (image pull sur NAS)

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import csv
 import hmac
 import json
 import os
@@ -64,6 +65,18 @@ _CONNECTIVITY_CACHE: dict[str, Any] = {
     "report": None,
 }
 
+try:
+    BROKER_SNAPSHOT_CACHE_TTL_S = max(10, int(os.getenv("BUBO_BROKER_SNAPSHOT_CACHE_TTL_S", "20")))
+except Exception:
+    BROKER_SNAPSHOT_CACHE_TTL_S = 20
+
+_BROKER_CACHE_LOCK = threading.Lock()
+_BROKER_CACHE: dict[str, Any] = {
+    "signature": "",
+    "timestamp": 0.0,
+    "report": None,
+}
+
 
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -121,6 +134,373 @@ def _coerce_float(value: Any, default: float, minimum: float | None = None) -> f
     if minimum is not None:
         parsed = max(minimum, parsed)
     return parsed
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_float_or_none(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed != parsed:  # NaN
+        return None
+    return parsed
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_csv_rows(path: Path, limit: int = 200) -> list[dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if isinstance(row, dict):
+                    rows.append({str(k): row.get(k) for k in row.keys()})
+    except Exception:
+        return []
+    if limit > 0:
+        rows = rows[-limit:]
+    return rows
+
+
+def _paper_report_paths_from_state(state_path: Path) -> dict[str, Path]:
+    out_dir = state_path.parent if state_path.parent else Path(".")
+    return {
+        "trades_csv": out_dir / "paper_trades_latest.csv",
+        "equity_csv": out_dir / "paper_equity_curve_latest.csv",
+        "daily_csv": out_dir / "paper_daily_stats_latest.csv",
+    }
+
+
+def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
+    state_path = Path(str(cfg.get("paper_state") or "data/paper_portfolio_state.json"))
+    state = _read_json_file(state_path)
+    broker = str(state.get("paper_broker", cfg.get("paper_broker", "local")) or "local")
+    positions_raw = state.get("positions", {})
+    positions: list[dict[str, Any]] = []
+    if isinstance(positions_raw, dict):
+        for ticker, pos in positions_raw.items():
+            if not isinstance(pos, dict):
+                continue
+            positions.append(
+                {
+                    "ticker": str(ticker),
+                    "shares": _safe_int(pos.get("shares"), 0),
+                    "entry_price": _safe_float(pos.get("entry_price"), 0.0),
+                    "last_price": _safe_float(pos.get("last_price"), 0.0),
+                    "market_value": _safe_float(pos.get("market_value"), 0.0),
+                    "unrealized_pnl": _safe_float(pos.get("unrealized_pnl"), 0.0),
+                    "entry_fee": _safe_float(pos.get("entry_fee"), 0.0),
+                    "entry_date": str(pos.get("entry_date", "")),
+                }
+            )
+    positions.sort(key=lambda r: abs(_safe_float(r.get("market_value"), 0.0)), reverse=True)
+
+    trades = state.get("trades", [])
+    if isinstance(trades, list):
+        closed_trades = [t for t in trades if isinstance(t, dict)][-100:]
+    else:
+        closed_trades = []
+    closed_trades.reverse()
+
+    actions = state.get("action_log", [])
+    if isinstance(actions, list):
+        recent_actions = [a for a in actions if isinstance(a, dict)][-100:]
+    else:
+        recent_actions = []
+    recent_actions.reverse()
+
+    report_paths = _paper_report_paths_from_state(state_path)
+    trades_csv_rows = _read_csv_rows(report_paths["trades_csv"], limit=200)
+    trades_csv_rows.reverse()
+
+    daily_csv_rows = _read_csv_rows(report_paths["daily_csv"], limit=30)
+    latest_daily = daily_csv_rows[-1] if daily_csv_rows else {}
+
+    return {
+        "ok": True,
+        "state_path": str(state_path),
+        "broker": broker,
+        "cash": _safe_float(state.get("cash"), 0.0),
+        "equity": _safe_float(state.get("equity"), 0.0),
+        "realized_pnl": _safe_float(state.get("realized_pnl"), 0.0),
+        "positions_count": len(positions),
+        "closed_trades_count": len([t for t in closed_trades if t.get("exit_date")]),
+        "cycles": _safe_int(state.get("cycles"), 0),
+        "updated_at": str(state.get("updated_at", "")),
+        "positions": positions,
+        "closed_trades": closed_trades,
+        "closed_trades_csv": trades_csv_rows,
+        "recent_actions": recent_actions,
+        "daily_latest": latest_daily,
+        "files": {k: str(v) for k, v in report_paths.items()},
+    }
+
+
+def _ensure_asyncio_event_loop():
+    # ib_insync requires an asyncio loop bound to the current thread.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def _ibkr_snapshot_signature(cfg: dict[str, Any]) -> str:
+    payload = {
+        "paper_enabled": bool(cfg.get("paper_enabled")),
+        "paper_broker": str(cfg.get("paper_broker", "")),
+        "ibkr_host": str(cfg.get("ibkr_host", "")),
+        "ibkr_port": int(cfg.get("ibkr_port", 0) or 0),
+        "ibkr_client_id": int(cfg.get("ibkr_client_id", 0) or 0),
+        "ibkr_account": str(cfg.get("ibkr_account", "")),
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
+    enabled = bool(cfg.get("paper_enabled")) and str(cfg.get("paper_broker")) == "ibkr"
+    if not enabled:
+        return {"enabled": False, "ok": False, "message": "Broker paper local (IBKR non actif)"}
+
+    host = str(cfg.get("ibkr_host") or "").strip()
+    port = _coerce_int(cfg.get("ibkr_port"), 0, minimum=0)
+    client_id = _coerce_int(cfg.get("ibkr_client_id"), 42, minimum=1)
+    account_hint = str(cfg.get("ibkr_account") or "").strip()
+    if not host or port <= 0:
+        return {"enabled": True, "ok": False, "message": "Host/port IBKR invalides"}
+
+    try:
+        from ib_insync import IB  # type: ignore
+    except Exception as e:
+        return {"enabled": True, "ok": False, "message": f"ib_insync indisponible: {e}"}
+
+    _ensure_asyncio_event_loop()
+    ib = IB()
+    started = time.perf_counter()
+    try:
+        connect_kwargs: dict[str, Any] = {
+            "host": host,
+            "port": int(port),
+            "clientId": int(max(1, client_id + 2000)),
+            "timeout": 8,
+            "readonly": True,
+        }
+        if account_hint:
+            connect_kwargs["account"] = account_hint
+        try:
+            ib.connect(**connect_kwargs)
+        except TypeError:
+            connect_kwargs.pop("readonly", None)
+            connect_kwargs.pop("account", None)
+            ib.connect(**connect_kwargs)
+
+        if not ib.isConnected():
+            return {"enabled": True, "ok": False, "message": "Connexion IBKR echouee"}
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        managed_accounts: list[str] = []
+        try:
+            managed_accounts = [str(a) for a in (ib.managedAccounts() or []) if str(a).strip()]
+        except Exception:
+            managed_accounts = []
+        account = account_hint or (managed_accounts[0] if managed_accounts else "")
+
+        summary_tags = {
+            "NetLiquidation",
+            "TotalCashValue",
+            "BuyingPower",
+            "AvailableFunds",
+            "ExcessLiquidity",
+            "GrossPositionValue",
+            "UnrealizedPnL",
+            "RealizedPnL",
+        }
+        account_summary: dict[str, Any] = {}
+        currency = ""
+        try:
+            summary_rows = ib.accountSummary(account=account) if account else ib.accountSummary()
+        except TypeError:
+            summary_rows = ib.accountSummary()
+        for row in summary_rows or []:
+            row_account = str(getattr(row, "account", "") or "")
+            if account and row_account and row_account != account:
+                continue
+            tag = str(getattr(row, "tag", "") or "")
+            if tag not in summary_tags:
+                continue
+            raw_val = getattr(row, "value", "")
+            parsed = _safe_float_or_none(raw_val)
+            account_summary[tag] = parsed if parsed is not None else str(raw_val)
+            if not currency:
+                currency = str(getattr(row, "currency", "") or "")
+
+        positions = []
+        try:
+            pos_rows = ib.positions(account=account) if account else ib.positions()
+        except TypeError:
+            pos_rows = ib.positions()
+        for p in pos_rows or []:
+            row_account = str(getattr(p, "account", "") or "")
+            if account and row_account and row_account != account:
+                continue
+            contract = getattr(p, "contract", None)
+            symbol = str(getattr(contract, "symbol", "") or "")
+            if not symbol:
+                continue
+            qty = _safe_float(getattr(p, "position", 0.0), 0.0)
+            if abs(qty) < 1e-12:
+                continue
+            pos = {
+                "account": row_account,
+                "symbol": symbol,
+                "exchange": str(getattr(contract, "exchange", "") or ""),
+                "currency": str(getattr(contract, "currency", "") or ""),
+                "quantity": qty,
+                "avg_cost": _safe_float(getattr(p, "avgCost", 0.0), 0.0),
+                "market_price": _safe_float_or_none(getattr(p, "marketPrice", None)),
+                "market_value": _safe_float_or_none(getattr(p, "marketValue", None)),
+                "unrealized_pnl": _safe_float_or_none(getattr(p, "unrealizedPNL", None)),
+                "realized_pnl": _safe_float_or_none(getattr(p, "realizedPNL", None)),
+            }
+            positions.append(pos)
+        positions.sort(key=lambda r: abs(_safe_float(r.get("market_value"), 0.0)), reverse=True)
+
+        executions = []
+        total_commission = 0.0
+        try:
+            fills = ib.reqExecutions() or []
+        except Exception:
+            fills = []
+        for fill in fills[-250:]:
+            contract = getattr(fill, "contract", None)
+            execution = getattr(fill, "execution", None)
+            report = getattr(fill, "commissionReport", None)
+            symbol = str(getattr(contract, "symbol", "") or "")
+            if not symbol:
+                continue
+            exec_account = str(getattr(execution, "acctNumber", "") or "")
+            if account and exec_account and exec_account != account:
+                continue
+            exec_time = getattr(execution, "time", None)
+            if hasattr(exec_time, "isoformat"):
+                ts = exec_time.isoformat()
+            else:
+                ts = str(exec_time or "")
+            commission = _safe_float(getattr(report, "commission", 0.0) if report is not None else 0.0, 0.0)
+            total_commission += commission
+            executions.append(
+                {
+                    "time": ts,
+                    "account": exec_account,
+                    "symbol": symbol,
+                    "side": str(getattr(execution, "side", "") or ""),
+                    "shares": _safe_float(getattr(execution, "shares", 0.0), 0.0),
+                    "price": _safe_float(getattr(execution, "price", 0.0), 0.0),
+                    "order_id": _safe_int(getattr(execution, "orderId", 0), 0),
+                    "perm_id": _safe_int(getattr(execution, "permId", 0), 0),
+                    "exec_id": str(getattr(execution, "execId", "") or ""),
+                    "commission": commission,
+                    "commission_currency": str(getattr(report, "currency", "") or "") if report is not None else "",
+                    "realized_pnl": _safe_float_or_none(getattr(report, "realizedPNL", None) if report is not None else None),
+                }
+            )
+        executions.sort(key=lambda r: str(r.get("time", "")), reverse=True)
+        executions = executions[:100]
+
+        return {
+            "enabled": True,
+            "ok": True,
+            "message": "Snapshot IBKR OK",
+            "latency_ms": latency_ms,
+            "host": host,
+            "port": int(port),
+            "account": account,
+            "managed_accounts": managed_accounts,
+            "currency": currency,
+            "account_summary": account_summary,
+            "positions": positions,
+            "positions_count": len(positions),
+            "executions": executions,
+            "executions_count": len(executions),
+            "total_commission": total_commission,
+            "total_commission_currency": (executions[0].get("commission_currency") if executions else currency),
+            "generated_at": _now_text(),
+        }
+    except Exception as e:
+        return {"enabled": True, "ok": False, "message": str(e)}
+    finally:
+        try:
+            ib.disconnect()
+        except Exception:
+            pass
+
+
+def get_ibkr_snapshot(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
+    signature = _ibkr_snapshot_signature(cfg)
+    now = time.time()
+    with _BROKER_CACHE_LOCK:
+        cached = _BROKER_CACHE.get("report")
+        cached_sig = _BROKER_CACHE.get("signature")
+        cached_ts = float(_BROKER_CACHE.get("timestamp") or 0.0)
+        age_s = int(now - cached_ts) if cached_ts else 0
+        cache_valid = (
+            not force
+            and cached is not None
+            and cached_sig == signature
+            and age_s < BROKER_SNAPSHOT_CACHE_TTL_S
+        )
+        if cache_valid:
+            return {**cached, "cached": True, "cache_age_s": age_s, "ttl_s": BROKER_SNAPSHOT_CACHE_TTL_S}
+
+    report = _fetch_ibkr_snapshot_uncached(cfg)
+    with _BROKER_CACHE_LOCK:
+        _BROKER_CACHE["signature"] = signature
+        _BROKER_CACHE["timestamp"] = now
+        _BROKER_CACHE["report"] = report
+    return {**report, "cached": False, "cache_age_s": 0, "ttl_s": BROKER_SNAPSHOT_CACHE_TTL_S}
+
+
+def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool = False) -> dict[str, Any]:
+    cfg = _sanitize_config(overrides)
+    paper = _build_paper_snapshot(cfg)
+    ibkr = get_ibkr_snapshot(cfg, force=force)
+    return {
+        "generated_at": _now_text(),
+        "paper": paper,
+        "ibkr": ibkr,
+        "config": {
+            "paper_enabled": cfg.get("paper_enabled"),
+            "paper_broker": cfg.get("paper_broker"),
+            "paper_state": cfg.get("paper_state"),
+            "ibkr_host": cfg.get("ibkr_host"),
+            "ibkr_port": cfg.get("ibkr_port"),
+            "ibkr_account": cfg.get("ibkr_account"),
+        },
+    }
 
 
 def _first_env(*names: str) -> str:
@@ -361,11 +741,7 @@ def _check_stocktwits() -> dict[str, Any]:
 
 
 def _ib_connect_probe(host: str, port: int, client_id: int) -> tuple[bool, str]:
-    # ib_insync requires an asyncio loop bound to the current thread.
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+    _ensure_asyncio_event_loop()
 
     try:
         from ib_insync import IB  # type: ignore
@@ -853,6 +1229,14 @@ def api_connectivity():
     payload = _parse_payload() if request.method == "POST" else {}
     force = _coerce_bool(request.args.get("force"), False) or _coerce_bool(payload.get("force"), False)
     report = get_connectivity_report(payload, force=force)
+    return jsonify(report)
+
+
+@app.route("/api/portfolio", methods=["GET", "POST"])
+def api_portfolio():
+    payload = _parse_payload() if request.method == "POST" else {}
+    force = _coerce_bool(request.args.get("force"), False) or _coerce_bool(payload.get("force"), False)
+    report = get_portfolio_snapshot(payload, force=force)
     return jsonify(report)
 
 

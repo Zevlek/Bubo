@@ -105,6 +105,8 @@ services:
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
+      BUBO_CONNECTIVITY_CACHE_TTL_S: ${BUBO_CONNECTIVITY_CACHE_TTL_S:-120}
+      BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-20}
       BUBO_WEB_AUTH_ENABLED: ${BUBO_WEB_AUTH_ENABLED:-1}
       BUBO_WEB_USER: ${BUBO_WEB_USER:-admin}
       BUBO_WEB_PASSWORD: ${BUBO_WEB_PASSWORD:-change-me}
@@ -184,6 +186,8 @@ services:
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
+      BUBO_CONNECTIVITY_CACHE_TTL_S: ${BUBO_CONNECTIVITY_CACHE_TTL_S:-120}
+      BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-20}
       BUBO_WEB_AUTH_ENABLED: ${BUBO_WEB_AUTH_ENABLED:-1}
       BUBO_WEB_USER: ${BUBO_WEB_USER:-admin}
       BUBO_WEB_PASSWORD: ${BUBO_WEB_PASSWORD:-change-me}
@@ -259,6 +263,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
 | `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
 | `BUBO_CONNECTIVITY_CACHE_TTL_S` | Cache du diagnostic connectivite API/IBKR dans l'UI | Non | Entier `>= 10` secondes | `120` |
+| `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` | Cache du snapshot portefeuille/compte IBKR dans l'UI | Non | Entier `>= 10` secondes | `20` |
 | `BUBO_WEB_AUTH_ENABLED` | Active le login UI | Non | `0` ou `1` | `1` |
 | `BUBO_WEB_USER` | Utilisateur login UI | Requis si auth active | Texte libre (ex: `admin`) | `admin` |
 | `BUBO_WEB_PASSWORD` | Mot de passe login UI | Requis si auth active (fortement recommande) | Texte libre | `change-me` |
