@@ -56,13 +56,14 @@ docker compose up -d
 
 ## Universe 1000 (pret a l'emploi)
 
-Un univers large preconstruit est disponible:
-- `data/universe_global_1000_v1.txt` (1000 tickers)
+Un univers large preconstruit 100% US est disponible:
+- `data/universe_us_1000_v1.txt` (1000 tickers US)
+- `data/universe_us_1000_v1_meta.json` (sources + methode)
 
 Pour l'activer:
 
 ```env
-BUBO_UNIVERSE_FILE=data/universe_global_1000_v1.txt
+BUBO_UNIVERSE_FILE=data/universe_us_1000_v1.txt
 ```
 
 L'univers 1000 est pense pour fonctionner avec l'entonnoir du moteur:
@@ -105,7 +106,7 @@ services:
       BUBO_GEMINI_PROMPT_MAX_HEADLINES: ${BUBO_GEMINI_PROMPT_MAX_HEADLINES:-3}
       BUBO_GEMINI_PROMPT_MAX_POSTS: ${BUBO_GEMINI_PROMPT_MAX_POSTS:-2}
       BUBO_GEMINI_PROMPT_MAX_POST_CHARS: ${BUBO_GEMINI_PROMPT_MAX_POST_CHARS:-80}
-      BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
+      BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_us_1000_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
       BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
@@ -196,7 +197,7 @@ services:
       BUBO_GEMINI_PROMPT_MAX_HEADLINES: ${BUBO_GEMINI_PROMPT_MAX_HEADLINES:-3}
       BUBO_GEMINI_PROMPT_MAX_POSTS: ${BUBO_GEMINI_PROMPT_MAX_POSTS:-2}
       BUBO_GEMINI_PROMPT_MAX_POST_CHARS: ${BUBO_GEMINI_PROMPT_MAX_POST_CHARS:-80}
-      BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
+      BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_us_1000_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
       BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
@@ -300,7 +301,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_WEB_USER` | Utilisateur login UI | Requis si auth active | Texte libre (ex: `admin`) | `admin` |
 | `BUBO_WEB_PASSWORD` | Mot de passe login UI | Requis si auth active (fortement recommande) | Texte libre | `change-me` |
 | `BUBO_WEB_SECRET` | Secret de session Flask | Requis en production | Chaine longue aleatoire | `change-this-secret` |
-| `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_global_v1.txt`) | `data/universe_global_v1.txt` |
+| `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_us_1000_v1.txt`) | `data/universe_us_1000_v1.txt` |
 | `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
 | `BUBO_GEMINI_MODEL_CHAIN` | Liste des modeles Gemini essayes (ordre de fallback) | Non | Liste separee par virgules (ex: `gemini-2.5-flash` ou `gemini-2.5-flash,gemini-2.5-pro`) | `gemini-2.5-flash` |
 | `BUBO_GEMINI_MAX_OUTPUT_TOKENS` | Limite de tokens de sortie par decision LLM | Non | Entier `128..2048` | `700` |

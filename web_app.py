@@ -985,7 +985,7 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
 def get_default_config() -> dict[str, Any]:
     return {
         "decision_engine": os.getenv("BUBO_DECISION_ENGINE", "llm"),
-        "universe_file": os.getenv("BUBO_UNIVERSE_FILE", "data/universe_global_v1.txt"),
+        "universe_file": os.getenv("BUBO_UNIVERSE_FILE", "data/universe_us_1000_v1.txt"),
         "preselect_top": _coerce_int(os.getenv("BUBO_PRESELECT_TOP", "60"), 60, minimum=1),
         "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "8"), 8, minimum=1),
         "watch_interval_min": _coerce_int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30"), 30, minimum=1),

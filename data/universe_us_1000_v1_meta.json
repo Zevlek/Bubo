@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-03-14T16:18:35.085680+00:00",
+  "method": "Top holdings from IVV(500)+IJH(300)+IJR(200), dedup + fill, US location filter",
+  "selected_count": 1000,
+  "us_location_filter": "Location == United States",
+  "sources": {
+    "IVV": "https://www.ishares.com/us/products/239726/ishares-core-sp-500-etf/1467271812596.ajax?fileType=csv&fileName=IVV_holdings&dataType=fund",
+    "IJH": "https://www.ishares.com/us/products/239763/ishares-core-sp-mid-cap-etf/1467271812596.ajax?fileType=csv&fileName=IJH_holdings&dataType=fund",
+    "IJR": "https://www.ishares.com/us/products/239774/ishares-core-sp-smallcap-etf/1467271812596.ajax?fileType=csv&fileName=IJR_holdings&dataType=fund"
+  },
+  "quotas": {
+    "IVV": 500,
+    "IJH": 300,
+    "IJR": 200
+  },
+  "source_pool_sizes": {
+    "IVV": 506,
+    "IJH": 406,
+    "IJR": 611
+  },
+  "file": "data\\universe_us_1000_v1.txt"
+}
