@@ -43,6 +43,7 @@ http://IP_DU_NAS:7654
 - Les `Parametres` sont masques par defaut (bouton `Parametres`).
 - Le diagnostic API/IBKR est manuel et repliable (bouton `Verifier les API` puis `Masquer les API`).
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
+- Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
 
 ## Build local (sans GHCR)
 
@@ -107,6 +108,7 @@ services:
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
       BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
+      BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -197,6 +199,7 @@ services:
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
       BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
+      BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -307,6 +310,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_PRESELECT_TOP` | Taille shortlist apres prescan | Non | Entier `>= 1` | `60` |
 | `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `8` |
 | `BUBO_WATCH_INTERVAL_MIN` | Intervalle entre deux cycles en mode watch | Non | Entier `>= 1` (minutes) | `30` |
+| `BUBO_US_MARKET_ONLY` | En mode watch, n'execute les cycles que pendant la session reguliere US | Non | `0` ou `1` | `1` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |

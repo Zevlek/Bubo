@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import numpy as np
@@ -97,6 +98,12 @@ WATCHLIST = {
     "RTX":    "Raytheon",
 }
 
+US_MARKET_TZ = ZoneInfo("America/New_York")
+US_MARKET_OPEN_HOUR = 9
+US_MARKET_OPEN_MINUTE = 30
+US_MARKET_CLOSE_HOUR = 16
+US_MARKET_CLOSE_MINUTE = 0
+
 @dataclass
 class EngineConfig:
     tickers: list = field(default_factory=lambda: list(WATCHLIST.keys()))
@@ -134,6 +141,7 @@ class EngineConfig:
     # Backtest
     backtest_period_years: int = 2
     watch_interval_min: int = 30
+    us_market_only: bool = True
     use_finbert: bool = True
     decision_engine: str = "llm"  # llm | rules
     paper_broker: str = "local"  # local | ibkr
@@ -169,6 +177,76 @@ def _normalize_decision_engine(value: str) -> str:
 def _normalize_ibkr_existing_positions_policy(value: str) -> str:
     policy = str(value or "include").strip().lower()
     return policy if policy in {"include", "ignore"} else "include"
+
+
+def _next_us_open(ref_et: datetime) -> datetime:
+    candidate = ref_et.replace(hour=US_MARKET_OPEN_HOUR, minute=US_MARKET_OPEN_MINUTE, second=0, microsecond=0)
+    if candidate < ref_et:
+        candidate = (candidate + timedelta(days=1)).replace(
+            hour=US_MARKET_OPEN_HOUR,
+            minute=US_MARKET_OPEN_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+    while candidate.weekday() >= 5:
+        candidate = (candidate + timedelta(days=1)).replace(
+            hour=US_MARKET_OPEN_HOUR,
+            minute=US_MARKET_OPEN_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+    return candidate
+
+
+def get_us_market_clock(now_et: datetime | None = None) -> dict[str, Any]:
+    if now_et is None:
+        now_et = datetime.now(US_MARKET_TZ)
+    elif now_et.tzinfo is None:
+        now_et = now_et.replace(tzinfo=US_MARKET_TZ)
+    else:
+        now_et = now_et.astimezone(US_MARKET_TZ)
+
+    today_open = now_et.replace(hour=US_MARKET_OPEN_HOUR, minute=US_MARKET_OPEN_MINUTE, second=0, microsecond=0)
+    today_close = now_et.replace(hour=US_MARKET_CLOSE_HOUR, minute=US_MARKET_CLOSE_MINUTE, second=0, microsecond=0)
+    weekday = now_et.weekday() < 5
+    is_open = weekday and today_open <= now_et < today_close
+
+    if is_open:
+        next_close = today_close
+        next_open = _next_us_open(today_close + timedelta(seconds=1))
+        sec_to_close = max(0, int((next_close - now_et).total_seconds()))
+        sec_to_open = 0
+    else:
+        next_close = None
+        if weekday and now_et < today_open:
+            next_open = today_open
+        else:
+            next_open = _next_us_open(now_et + timedelta(seconds=1))
+        sec_to_open = max(0, int((next_open - now_et).total_seconds()))
+        sec_to_close = None
+
+    return {
+        "time_et": now_et.strftime("%Y-%m-%d %H:%M:%S"),
+        "is_open": bool(is_open),
+        "next_open_et": next_open.strftime("%Y-%m-%d %H:%M:%S"),
+        "next_close_et": next_close.strftime("%Y-%m-%d %H:%M:%S") if next_close else "",
+        "seconds_to_open": sec_to_open,
+        "seconds_to_close": sec_to_close,
+    }
+
+
+def _format_duration_compact(seconds: int | float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    total = max(0, int(seconds))
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    if h > 0:
+        return f"{h}h {m:02d}m"
+    if m > 0:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
 
 
 # ─────────────────────────────────────────────
@@ -2178,6 +2256,12 @@ def main():
         default=int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30")),
         help="Intervalle de refresh en mode watch (minutes)",
     )
+    parser.add_argument(
+        "--us-market-only",
+        action=argparse.BooleanOptionalAction,
+        default=str(os.getenv("BUBO_US_MARKET_ONLY", "1")).strip().lower() in {"1", "true", "yes", "on"},
+        help="En mode watch, execute les cycles seulement pendant la session reguliere US (09:30-16:00 ET).",
+    )
     parser.add_argument("--screen-only", action="store_true",
                         help="Ne fait que la preslection et exporte la shortlist")
     parser.add_argument("--no-budget-gate", action="store_true",
@@ -2242,6 +2326,7 @@ def main():
     cfg = EngineConfig()
     cfg.initial_capital = args.capital
     cfg.watch_interval_min = max(1, int(args.watch_interval_min))
+    cfg.us_market_only = bool(args.us_market_only)
     cfg.use_finbert = not args.no_finbert
     cfg.decision_engine = _normalize_decision_engine(args.decision_engine)
     cfg.paper_broker = _normalize_paper_broker(args.paper_broker)
@@ -2314,11 +2399,27 @@ def main():
         engine = ScoringEngine(cfg)
         dynamic_universe = bool(args.universe_file and MODULES.get("screener"))
         print(f"\n  Mode surveillance — refresh {cfg.watch_interval_min}min")
+        if cfg.us_market_only:
+            print("  Session US only: actif (09:30-16:00 ET, hors jours feries US)")
         if dynamic_universe:
             print("  Universe dynamique actif: prescreen relance a chaque cycle")
         print(f"  Ctrl+C pour arrêter\n")
         while True:
             try:
+                market_clock = get_us_market_clock()
+                if cfg.us_market_only and not market_clock.get("is_open"):
+                    wait_s = max(30, int(market_clock.get("seconds_to_open") or (cfg.watch_interval_min * 60)))
+                    os.system("cls" if os.name == "nt" else "clear")
+                    print("\n" + "=" * 70)
+                    print("  BUBO — UNIFIED DASHBOARD")
+                    print(f"  NY time: {market_clock.get('time_et')}")
+                    print("=" * 70)
+                    print("  Marche US ferme: cycles en pause")
+                    print(f"  Reouverture: {market_clock.get('next_open_et')} (dans {_format_duration_compact(wait_s)})")
+                    print("  Heures regulieres: 09:30-16:00 ET (hors jours feries US)")
+                    time.sleep(wait_s)
+                    continue
+
                 dynamic_info = ""
                 if dynamic_universe:
                     universe = load_universe(args.universe_file)
@@ -2365,8 +2466,14 @@ def main():
 
                 if dynamic_info:
                     print(f"\n  {dynamic_info}")
-                print(f"\n  Prochain refresh: {cfg.watch_interval_min}min")
-                time.sleep(cfg.watch_interval_min * 60)
+                wait_s = cfg.watch_interval_min * 60
+                if cfg.us_market_only:
+                    clock_after = get_us_market_clock()
+                    to_close = clock_after.get("seconds_to_close")
+                    if isinstance(to_close, int):
+                        wait_s = max(5, min(wait_s, to_close))
+                print(f"\n  Prochain refresh: {_format_duration_compact(wait_s)}")
+                time.sleep(wait_s)
             except KeyboardInterrupt:
                 print("\n  👋 Arrêté.")
                 break

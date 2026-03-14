@@ -495,6 +495,7 @@
           <strong id="run-state">Inactif</strong>
         </div>
         <div id="status-details" class="hint">Fuseau horaire: {{ timezone }}</div>
+        <div id="market-hours" class="hint">Marche US: chargement...</div>
 
         <div class="actions">
           <button class="btn-main" id="btn-watch">Lancer la surveillance</button>
@@ -602,6 +603,7 @@
         </select>
 
         <div class="checks">
+          <label><input id="us_market_only" type="checkbox" {% if defaults.us_market_only %}checked{% endif %}> Surveiller seulement la session US (09:30-16:00 ET)</label>
           <label><input id="paper_enabled" type="checkbox" {% if defaults.paper_enabled %}checked{% endif %}> Activer paper trading</label>
           <label><input id="no_finbert" type="checkbox" {% if defaults.no_finbert %}checked{% endif %}> Désactiver FinBERT (plus léger)</label>
           <label><input id="no_budget_gate" type="checkbox" {% if defaults.no_budget_gate %}checked{% endif %}> Désactiver la limite d'exposition</label>
@@ -706,6 +708,7 @@
     const runDotEl = document.getElementById("run-dot");
     const runStateEl = document.getElementById("run-state");
     const statusDetailsEl = document.getElementById("status-details");
+    const marketHoursEl = document.getElementById("market-hours");
     const messageBoxEl = document.getElementById("message-box");
     const logAutoScrollEl = document.getElementById("log-autoscroll");
     const connectivityListEl = document.getElementById("connectivity-list");
@@ -726,6 +729,7 @@
         preselect_top: Number(document.getElementById("preselect_top").value || 60),
         max_deep: Number(document.getElementById("max_deep").value || 8),
         watch_interval_min: Number(document.getElementById("watch_interval_min").value || 30),
+        us_market_only: document.getElementById("us_market_only").checked,
         capital: Number(document.getElementById("capital").value || 10000),
         paper_state: document.getElementById("paper_state").value.trim(),
         paper_webhook: document.getElementById("paper_webhook").value.trim(),
@@ -781,6 +785,16 @@
       const n = asNumber(value, NaN);
       if (!Number.isFinite(n)) return "n/a";
       return `${n >= 0 ? "+" : ""}${n.toFixed(digits)} ${currency}`;
+    }
+
+    function formatDurationFr(seconds) {
+      const total = Math.max(0, Number(seconds || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = Math.floor(total % 60);
+      if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+      if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+      return `${s}s`;
     }
 
     function pnlClass(value) {
@@ -840,6 +854,17 @@
         data.last_finished_at ? `terminé ${data.last_finished_at}` : ""
       ].filter(Boolean).join(" | ");
       statusDetailsEl.textContent = details || "Aucun détail d'exécution";
+
+      const m = data.us_market || {};
+      if (!m.time_et) {
+        marketHoursEl.textContent = "Marche US: indisponible";
+      } else if (m.is_open) {
+        marketHoursEl.textContent =
+          `Marche US: OUVERT | Heure NY: ${m.time_et} | Fermeture: ${m.next_close_et} (dans ${formatDurationFr(m.seconds_to_close)})`;
+      } else {
+        marketHoursEl.textContent =
+          `Marche US: FERME | Heure NY: ${m.time_et} | Reouverture: ${m.next_open_et} (dans ${formatDurationFr(m.seconds_to_open)})`;
+      }
     }
 
     async function refreshLogs() {
