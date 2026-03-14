@@ -646,7 +646,7 @@
                   <th>Prix moyen</th>
                   <th>Prix d'entrée</th>
                   <th>Valeur</th>
-                  <th>P/L latent</th>
+                  <th>P/L</th>
                 </tr>
               </thead>
               <tbody id="portfolio-pos-body">
@@ -889,7 +889,6 @@
     }
 
     async function refreshConnectivity(force = false) {
-      connectivityPanelEl.classList.remove("hidden");
       try {
         const suffix = force ? "?force=1" : "";
         const res = await fetch(`/api/connectivity${suffix}`, {
@@ -995,8 +994,15 @@
             const avgCost = asNumber(pos.avg_cost, NaN);
             const qty = asNumber(pos.quantity, 0);
             const marketValue = asNumber(pos.market_value, NaN);
+            const marketPrice = asNumber(pos.market_price, NaN);
             const unrealized = asNumber(pos.unrealized_pnl, NaN);
             const displayName = symbol || "n/a";
+            const valueFallback = Number.isFinite(marketPrice)
+              ? marketPrice * qty
+              : (Number.isFinite(avgCost) ? avgCost * qty : NaN);
+            const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
+              ? valueFallback
+              : marketValue;
             return `
               <tr>
                 <td>${escapeHtml(displayName)}</td>
@@ -1004,7 +1010,7 @@
                 <td>${qty.toFixed(0)}</td>
                 <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
                 <td>${Number.isFinite(entry) ? entry.toFixed(2) : (Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a")}</td>
-                <td>${Number.isFinite(marketValue) ? fmtMoney(marketValue, currency) : "n/a"}</td>
+                <td>${Number.isFinite(displayValue) ? fmtMoney(displayValue, currency) : "n/a"}</td>
                 <td class="${pnlClass(unrealized)}">${fmtSigned(unrealized)} ${currency}</td>
               </tr>
             `;
@@ -1049,7 +1055,17 @@
     document.getElementById("btn-once").addEventListener("click", () => callAction("/api/run-once"));
     document.getElementById("btn-screen").addEventListener("click", () => callAction("/api/screen-only"));
     document.getElementById("btn-stop").addEventListener("click", stopProcess);
-    document.getElementById("btn-connectivity").addEventListener("click", () => refreshConnectivity(true));
+    const btnConnectivityEl = document.getElementById("btn-connectivity");
+    btnConnectivityEl.addEventListener("click", async () => {
+      if (!connectivityPanelEl.classList.contains("hidden")) {
+        connectivityPanelEl.classList.add("hidden");
+        btnConnectivityEl.textContent = "Vérifier les API";
+        return;
+      }
+      connectivityPanelEl.classList.remove("hidden");
+      btnConnectivityEl.textContent = "Masquer les API";
+      await refreshConnectivity(true);
+    });
     document.getElementById("btn-portfolio").addEventListener("click", () => refreshPortfolio(true));
     document.getElementById("btn-settings-toggle").addEventListener("click", () => {
       settingsPanelEl.classList.toggle("hidden");
