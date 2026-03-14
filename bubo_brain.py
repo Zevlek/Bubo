@@ -84,10 +84,25 @@ WATCHLIST = {
     "RTX":    "Raytheon",
 }
 
-GEMINI_MODELS = [
-    "gemini-2.5-flash",  # Gratuit — limites généreuses (1000 req/jour)
-    "gemini-2.5-pro",    # Payant — meilleur raisonnement si billing activé
-]
+def _parse_model_chain(raw: str) -> list[str]:
+    items = [m.strip() for m in str(raw or "").split(",") if m.strip()]
+    return items or ["gemini-2.5-flash"]
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+GEMINI_MODELS = _parse_model_chain(os.environ.get("BUBO_GEMINI_MODEL_CHAIN", "gemini-2.5-flash"))
+GEMINI_MAX_OUTPUT_TOKENS = _env_int("BUBO_GEMINI_MAX_OUTPUT_TOKENS", 700, 128, 2048)
+PROMPT_MAX_EVENTS = _env_int("BUBO_GEMINI_PROMPT_MAX_EVENTS", 4, 0, 10)
+PROMPT_MAX_HEADLINES = _env_int("BUBO_GEMINI_PROMPT_MAX_HEADLINES", 3, 0, 10)
+PROMPT_MAX_POSTS = _env_int("BUBO_GEMINI_PROMPT_MAX_POSTS", 2, 0, 10)
+PROMPT_MAX_POST_CHARS = _env_int("BUBO_GEMINI_PROMPT_MAX_POST_CHARS", 80, 20, 300)
 
 SYSTEM_PROMPT = """Tu es BUBO, un analyste financier expert spécialisé dans le secteur de la défense (Dassault Aviation, Airbus, Lockheed Martin, Raytheon).
 
@@ -354,7 +369,7 @@ class DataCollector:
 # ─────────────────────────────────────────────
 
 class GeminiBrain:
-    """Envoie les données à Gemini 2.5 Pro et parse la décision."""
+    """Envoie les données à Gemini et parse la décision."""
 
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -366,7 +381,10 @@ class GeminiBrain:
         try:
             from google import genai
             self.client = genai.Client(api_key=self.api_key)
-            print(f"  ✅ Gemini connecté (modèles: {', '.join(GEMINI_MODELS)})")
+            print(
+                "  ✅ Gemini connecté "
+                f"(modèles: {', '.join(GEMINI_MODELS)} | max_output_tokens={GEMINI_MAX_OUTPUT_TOKENS})"
+            )
         except ImportError:
             print("  ❌ google-genai non installé: pip install google-genai")
 
@@ -397,7 +415,7 @@ class GeminiBrain:
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
                             temperature=0.3,
-                            max_output_tokens=2048,
+                            max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
                             response_mime_type="application/json",
                         ),
                     )
@@ -447,7 +465,7 @@ class GeminiBrain:
             if events.get("blackout_actif"):
                 parts.append(f"⚠️ BLACKOUT: {events.get('blackout_raison')}")
             parts.append(f"Profil: {events.get('profil_earnings')} | Beat rate: {events.get('beat_rate_pct')}% | Modifier: {events.get('modifier_position')}x")
-            for ev in events.get("evenements_a_venir", [])[:6]:
+            for ev in events.get("evenements_a_venir", [])[:PROMPT_MAX_EVENTS]:
                 parts.append(f"  J+{ev['jours_restants']:2d} {ev['date']} {ev['description']} (imp: {ev['importance']}/3)")
 
         # News
@@ -455,7 +473,7 @@ class GeminiBrain:
         if news and "error" not in news:
             parts.append(f"\n═══ NEWS SENTIMENT ═══")
             parts.append(f"Score: {news.get('score_sentiment'):+.4f} | {news.get('label')} | {news.get('nb_articles')} articles ({news.get('positifs')}+/{news.get('negatifs')}-/{news.get('neutres')}~) | Conf: {news.get('confiance_moyenne')}")
-            for h in news.get("top_headlines", [])[:5]:
+            for h in news.get("top_headlines", [])[:PROMPT_MAX_HEADLINES]:
                 parts.append(f"  {h}")
 
         # Social
@@ -463,8 +481,8 @@ class GeminiBrain:
         if social and "error" not in social:
             parts.append(f"\n═══ SOCIAL ═══")
             parts.append(f"Score: {social.get('score_social')}/100 | {social.get('label')} | {social.get('nb_mentions')} mentions | Sent: {social.get('sentiment_pondere'):+.3f} | Spike: {social.get('volume_spike')}")
-            for p in social.get("top_posts", [])[:4]:
-                parts.append(f"  [{p['source']}] {p['sentiment']} ({p['score']:+.3f}, eng:{p['engagement']}) {p['texte'][:100]}")
+            for p in social.get("top_posts", [])[:PROMPT_MAX_POSTS]:
+                parts.append(f"  [{p['source']}] {p['sentiment']} ({p['score']:+.3f}, eng:{p['engagement']}) {p['texte'][:PROMPT_MAX_POST_CHARS]}")
 
         parts.append(f"\nDécision JSON pour {ticker}:")
         return "\n".join(parts)

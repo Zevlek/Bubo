@@ -97,6 +97,12 @@ services:
       BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
       BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
+      BUBO_GEMINI_MODEL_CHAIN: ${BUBO_GEMINI_MODEL_CHAIN:-gemini-2.5-flash}
+      BUBO_GEMINI_MAX_OUTPUT_TOKENS: ${BUBO_GEMINI_MAX_OUTPUT_TOKENS:-700}
+      BUBO_GEMINI_PROMPT_MAX_EVENTS: ${BUBO_GEMINI_PROMPT_MAX_EVENTS:-4}
+      BUBO_GEMINI_PROMPT_MAX_HEADLINES: ${BUBO_GEMINI_PROMPT_MAX_HEADLINES:-3}
+      BUBO_GEMINI_PROMPT_MAX_POSTS: ${BUBO_GEMINI_PROMPT_MAX_POSTS:-2}
+      BUBO_GEMINI_PROMPT_MAX_POST_CHARS: ${BUBO_GEMINI_PROMPT_MAX_POST_CHARS:-80}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
@@ -181,6 +187,12 @@ services:
       BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
       BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
+      BUBO_GEMINI_MODEL_CHAIN: ${BUBO_GEMINI_MODEL_CHAIN:-gemini-2.5-flash}
+      BUBO_GEMINI_MAX_OUTPUT_TOKENS: ${BUBO_GEMINI_MAX_OUTPUT_TOKENS:-700}
+      BUBO_GEMINI_PROMPT_MAX_EVENTS: ${BUBO_GEMINI_PROMPT_MAX_EVENTS:-4}
+      BUBO_GEMINI_PROMPT_MAX_HEADLINES: ${BUBO_GEMINI_PROMPT_MAX_HEADLINES:-3}
+      BUBO_GEMINI_PROMPT_MAX_POSTS: ${BUBO_GEMINI_PROMPT_MAX_POSTS:-2}
+      BUBO_GEMINI_PROMPT_MAX_POST_CHARS: ${BUBO_GEMINI_PROMPT_MAX_POST_CHARS:-80}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
@@ -286,6 +298,12 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_WEB_SECRET` | Secret de session Flask | Requis en production | Chaine longue aleatoire | `change-this-secret` |
 | `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_global_v1.txt`) | `data/universe_global_v1.txt` |
 | `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
+| `BUBO_GEMINI_MODEL_CHAIN` | Liste des modeles Gemini essayes (ordre de fallback) | Non | Liste separee par virgules (ex: `gemini-2.5-flash` ou `gemini-2.5-flash,gemini-2.5-pro`) | `gemini-2.5-flash` |
+| `BUBO_GEMINI_MAX_OUTPUT_TOKENS` | Limite de tokens de sortie par decision LLM | Non | Entier `128..2048` | `700` |
+| `BUBO_GEMINI_PROMPT_MAX_EVENTS` | Nombre max d'evenements inclus dans le prompt | Non | Entier `0..10` | `4` |
+| `BUBO_GEMINI_PROMPT_MAX_HEADLINES` | Nombre max de headlines news dans le prompt | Non | Entier `0..10` | `3` |
+| `BUBO_GEMINI_PROMPT_MAX_POSTS` | Nombre max de posts sociaux dans le prompt | Non | Entier `0..10` | `2` |
+| `BUBO_GEMINI_PROMPT_MAX_POST_CHARS` | Longueur max d'un extrait social dans le prompt | Non | Entier `20..300` | `80` |
 | `BUBO_PRESELECT_TOP` | Taille shortlist apres prescan | Non | Entier `>= 1` | `60` |
 | `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `8` |
 | `BUBO_WATCH_INTERVAL_MIN` | Intervalle entre deux cycles en mode watch | Non | Entier `>= 1` (minutes) | `30` |
@@ -330,6 +348,7 @@ Notes compatibilite:
 - Le code accepte aussi `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `REDDIT_USER_AGENT` en alternatives aux variables `BUBO_*`.
 - Le code accepte aussi `STOCKTWITS_BASE_URL` et `STOCKTWITS_TEST_SYMBOL` en alternatives a `BUBO_STOCKTWITS_*`.
 - Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur renvoie `NO_DECISION` (aucun trade).
+- Au demarrage, le log affiche les modeles Gemini utilises et `max_output_tokens`.
 
 ## Test paper trading IBKR
 
