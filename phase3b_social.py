@@ -49,6 +49,7 @@ class SocialConfig:
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
     reddit_user_agent: str = "Bubo/1.0 by u/YOUR_USERNAME"
+    stocktwits_base_url: str = "https://api.stocktwits.com/api/2"
 
     # Subreddits à surveiller par catégorie
     subreddits_general: list = field(default_factory=lambda: [
@@ -167,6 +168,7 @@ def load_config(path: str = "social_config.json") -> SocialConfig:
         "reddit_client_id": ["BUBO_REDDIT_CLIENT_ID", "REDDIT_CLIENT_ID"],
         "reddit_client_secret": ["BUBO_REDDIT_CLIENT_SECRET", "REDDIT_CLIENT_SECRET"],
         "reddit_user_agent": ["BUBO_REDDIT_USER_AGENT", "REDDIT_USER_AGENT"],
+        "stocktwits_base_url": ["BUBO_STOCKTWITS_BASE_URL", "STOCKTWITS_BASE_URL"],
     }
     for attr, names in env_map.items():
         for name in names:
@@ -435,11 +437,14 @@ class StocktwitsFetcher:
     Limite: 200 requêtes/heure par IP.
     """
 
-    BASE_URL = "https://api.stocktwits.com/api/2"
+    DEFAULT_BASE_URL = "https://api.stocktwits.com/api/2"
 
     def __init__(self, cfg: SocialConfig):
         self.cfg = cfg
-        print("  ✅ Stocktwits (gratuit, aucune clé requise)")
+        self.base_url = str(getattr(cfg, "stocktwits_base_url", "") or self.DEFAULT_BASE_URL).strip().rstrip("/")
+        if not self.base_url:
+            self.base_url = self.DEFAULT_BASE_URL
+        print(f"  ✅ Stocktwits (gratuit, aucune clé requise) [{self.base_url}]")
 
     def fetch(self, ticker: str) -> list:
         search_info = TICKER_SEARCH_MAP.get(ticker, {})
@@ -504,7 +509,7 @@ class StocktwitsFetcher:
     def _fetch_symbol_stream(self, symbol: str, cutoff: datetime) -> list:
         posts = []
         try:
-            url = f"{self.BASE_URL}/streams/symbol/{symbol}.json"
+            url = f"{self.base_url}/streams/symbol/{symbol}.json"
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Bubo/1.0",
                 "Accept": "application/json"
@@ -571,7 +576,7 @@ class StocktwitsFetcher:
         for kw in keywords:
             try:
                 encoded = urllib.parse.quote(kw)
-                url = f"{self.BASE_URL}/search/symbols.json?q={encoded}"
+                url = f"{self.base_url}/search/symbols.json?q={encoded}"
                 req = urllib.request.Request(url, headers={
                     "User-Agent": "Bubo/1.0",
                     "Accept": "application/json"

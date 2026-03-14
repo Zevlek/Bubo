@@ -63,6 +63,7 @@ class ApiEnvConfigTests(unittest.TestCase):
                 "BUBO_REDDIT_CLIENT_ID": "env_id",
                 "BUBO_REDDIT_CLIENT_SECRET": "env_secret",
                 "BUBO_REDDIT_USER_AGENT": "env_agent",
+                "BUBO_STOCKTWITS_BASE_URL": "https://stocktwits-proxy.example/api/2",
             }
         )
         try:
@@ -73,6 +74,7 @@ class ApiEnvConfigTests(unittest.TestCase):
                 self.assertEqual(cfg.reddit_client_id, "env_id")
                 self.assertEqual(cfg.reddit_client_secret, "env_secret")
                 self.assertEqual(cfg.reddit_user_agent, "env_agent")
+                self.assertEqual(cfg.stocktwits_base_url, "https://stocktwits-proxy.example/api/2")
         finally:
             self._restore_env(old)
 

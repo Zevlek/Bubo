@@ -21,6 +21,8 @@ Si tu utilises des APIs externes, configure aussi:
 - `BUBO_REDDIT_CLIENT_ID` (social)
 - `BUBO_REDDIT_CLIENT_SECRET` (social)
 - `BUBO_REDDIT_USER_AGENT` (social)
+- `BUBO_STOCKTWITS_BASE_URL` (social, optionnel)
+- `BUBO_STOCKTWITS_TEST_SYMBOL` (diagnostic UI, optionnel)
 - `BUBO_PAPER_WEBHOOK` (alertes paper)
 
 ## 2) Lancer localement avec build

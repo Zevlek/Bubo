@@ -85,6 +85,8 @@ services:
       BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
       BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
       BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
+      BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
@@ -162,6 +164,8 @@ services:
       BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
       BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
       BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
+      BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
@@ -293,11 +297,14 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_REDDIT_CLIENT_ID` | Reddit API client id | Non (requis avec les 2 autres Reddit pour social) | Valeur OAuth Reddit ou vide | vide |
 | `BUBO_REDDIT_CLIENT_SECRET` | Reddit API client secret | Non (requis avec les 2 autres Reddit pour social) | Valeur OAuth Reddit ou vide | vide |
 | `BUBO_REDDIT_USER_AGENT` | Reddit API user-agent | Non (requis avec les 2 autres Reddit pour social) | Ex: `Bubo/1.0 by u/USERNAME` | vide dans compose / exemple rempli dans `.env.example` |
+| `BUBO_STOCKTWITS_BASE_URL` | Base URL Stocktwits (collecte sociale + diagnostic UI) | Non | URL HTTP(S) | `https://api.stocktwits.com/api/2` |
+| `BUBO_STOCKTWITS_TEST_SYMBOL` | Symbole teste par le diagnostic UI Stocktwits | Non | Symbole action (ex: `AAPL`, `LMT`, `RTX`) | `AAPL` |
 
 Notes compatibilite:
 - Le code accepte aussi `NEWSAPI_KEY` en alternative a `BUBO_NEWSAPI_KEY`.
 - Le code accepte aussi `FINNHUB_KEY` en alternative a `BUBO_FINNHUB_KEY`.
 - Le code accepte aussi `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `REDDIT_USER_AGENT` en alternatives aux variables `BUBO_*`.
+- Le code accepte aussi `STOCKTWITS_BASE_URL` et `STOCKTWITS_TEST_SYMBOL` en alternatives a `BUBO_STOCKTWITS_*`.
 - Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur renvoie `NO_DECISION` (aucun trade).
 
 ## Test paper trading IBKR

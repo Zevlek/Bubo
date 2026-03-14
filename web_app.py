@@ -47,6 +47,15 @@ try:
 except Exception:
     CONNECTIVITY_CACHE_TTL_S = 120
 
+STOCKTWITS_BASE_URL = str(
+    os.getenv("BUBO_STOCKTWITS_BASE_URL", os.getenv("STOCKTWITS_BASE_URL", "https://api.stocktwits.com/api/2")) or ""
+).strip().rstrip("/")
+if not STOCKTWITS_BASE_URL:
+    STOCKTWITS_BASE_URL = "https://api.stocktwits.com/api/2"
+STOCKTWITS_TEST_SYMBOL = str(
+    os.getenv("BUBO_STOCKTWITS_TEST_SYMBOL", os.getenv("STOCKTWITS_TEST_SYMBOL", "AAPL")) or "AAPL"
+).strip().upper() or "AAPL"
+
 _CONNECTIVITY_CACHE_LOCK = threading.Lock()
 _CONNECTIVITY_CACHE: dict[str, Any] = {
     "signature": "",
@@ -315,17 +324,39 @@ def _check_reddit() -> dict[str, Any]:
 
 
 def _check_stocktwits() -> dict[str, Any]:
+    probe_url = f"{STOCKTWITS_BASE_URL}/streams/symbol/{STOCKTWITS_TEST_SYMBOL}.json"
     status, payload, err, latency = _http_get_json(
-        "https://api.stocktwits.com/api/2/streams/symbol/AAPL.json",
+        probe_url,
         timeout_s=4.0,
     )
     if err:
         return _service_row("stocktwits", "Stocktwits", "warning", f"Erreur reseau: {err}", latency_ms=latency)
     if status == 200 and isinstance(payload, dict):
-        return _service_row("stocktwits", "Stocktwits", "ok", "Flux public OK", latency_ms=latency)
+        return _service_row(
+            "stocktwits",
+            "Stocktwits",
+            "ok",
+            f"Flux public OK ({STOCKTWITS_TEST_SYMBOL})",
+            latency_ms=latency,
+            details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
+        )
     if status == 429:
-        return _service_row("stocktwits", "Stocktwits", "warning", "Rate limit (HTTP 429)", latency_ms=latency)
-    return _service_row("stocktwits", "Stocktwits", "warning", f"HTTP {status}", latency_ms=latency)
+        return _service_row(
+            "stocktwits",
+            "Stocktwits",
+            "warning",
+            f"Rate limit (HTTP 429) sur {STOCKTWITS_TEST_SYMBOL}",
+            latency_ms=latency,
+            details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
+        )
+    return _service_row(
+        "stocktwits",
+        "Stocktwits",
+        "warning",
+        f"HTTP {status} ({STOCKTWITS_TEST_SYMBOL})",
+        latency_ms=latency,
+        details={"base_url": STOCKTWITS_BASE_URL, "symbol": STOCKTWITS_TEST_SYMBOL},
+    )
 
 
 def _ib_connect_probe(host: str, port: int, client_id: int) -> tuple[bool, str]:
@@ -407,6 +438,8 @@ def _connectivity_signature(cfg: dict[str, Any]) -> str:
         "ibkr_host": str(cfg.get("ibkr_host", "")),
         "ibkr_port": int(cfg.get("ibkr_port", 0) or 0),
         "ibkr_client_id": int(cfg.get("ibkr_client_id", 0) or 0),
+        "stocktwits_base_url": STOCKTWITS_BASE_URL,
+        "stocktwits_test_symbol": STOCKTWITS_TEST_SYMBOL,
     }
     return json.dumps(payload, sort_keys=True)
 
@@ -463,6 +496,8 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
                     "paper_broker": cfg.get("paper_broker"),
                     "ibkr_host": cfg.get("ibkr_host"),
                     "ibkr_port": cfg.get("ibkr_port"),
+                    "stocktwits_base_url": STOCKTWITS_BASE_URL,
+                    "stocktwits_test_symbol": STOCKTWITS_TEST_SYMBOL,
                 },
             }
 
@@ -482,6 +517,8 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
             "paper_broker": cfg.get("paper_broker"),
             "ibkr_host": cfg.get("ibkr_host"),
             "ibkr_port": cfg.get("ibkr_port"),
+            "stocktwits_base_url": STOCKTWITS_BASE_URL,
+            "stocktwits_test_symbol": STOCKTWITS_TEST_SYMBOL,
         },
     }
 
