@@ -485,6 +485,9 @@
           </div>
         </div>
 
+        <label class="label" for="watch_interval_min">Watch interval (min)</label>
+        <input id="watch_interval_min" type="number" min="1" value="{{ defaults.watch_interval_min }}">
+
         <div class="row-2">
           <div>
             <label class="label" for="capital">Capital</label>
@@ -712,7 +715,8 @@
         universe_file: document.getElementById("universe_file").value.trim(),
         decision_engine: document.getElementById("decision_engine").value,
         preselect_top: Number(document.getElementById("preselect_top").value || 60),
-        max_deep: Number(document.getElementById("max_deep").value || 20),
+        max_deep: Number(document.getElementById("max_deep").value || 8),
+        watch_interval_min: Number(document.getElementById("watch_interval_min").value || 30),
         capital: Number(document.getElementById("capital").value || 10000),
         paper_state: document.getElementById("paper_state").value.trim(),
         paper_webhook: document.getElementById("paper_webhook").value.trim(),

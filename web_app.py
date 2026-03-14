@@ -986,7 +986,8 @@ def get_default_config() -> dict[str, Any]:
         "decision_engine": os.getenv("BUBO_DECISION_ENGINE", "llm"),
         "universe_file": os.getenv("BUBO_UNIVERSE_FILE", "data/universe_global_v1.txt"),
         "preselect_top": _coerce_int(os.getenv("BUBO_PRESELECT_TOP", "60"), 60, minimum=1),
-        "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "20"), 20, minimum=1),
+        "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "8"), 8, minimum=1),
+        "watch_interval_min": _coerce_int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30"), 30, minimum=1),
         "capital": _coerce_float(os.getenv("BUBO_CAPITAL", "10000"), 10000.0, minimum=1.0),
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),
         "paper_state": os.getenv("BUBO_PAPER_STATE", "data/paper_portfolio_state.json"),
@@ -1034,6 +1035,11 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
 
     cfg["preselect_top"] = _coerce_int(payload.get("preselect_top", cfg["preselect_top"]), cfg["preselect_top"], minimum=1)
     cfg["max_deep"] = _coerce_int(payload.get("max_deep", cfg["max_deep"]), cfg["max_deep"], minimum=1)
+    cfg["watch_interval_min"] = _coerce_int(
+        payload.get("watch_interval_min", cfg["watch_interval_min"]),
+        cfg["watch_interval_min"],
+        minimum=1,
+    )
     cfg["capital"] = _coerce_float(payload.get("capital", cfg["capital"]), cfg["capital"], minimum=1.0)
     cfg["ibkr_port"] = _coerce_int(payload.get("ibkr_port", cfg["ibkr_port"]), cfg["ibkr_port"], minimum=1)
     cfg["ibkr_client_id"] = _coerce_int(payload.get("ibkr_client_id", cfg["ibkr_client_id"]), cfg["ibkr_client_id"], minimum=1)
@@ -1069,6 +1075,7 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.extend(["--universe-file", cfg["universe_file"]])
         cmd.extend(["--preselect-top", str(cfg["preselect_top"])])
         cmd.extend(["--max-deep", str(cfg["max_deep"])])
+    cmd.extend(["--watch-interval-min", str(cfg["watch_interval_min"])])
 
     cmd.extend(["--decision-engine", str(cfg["decision_engine"])])
 

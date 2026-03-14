@@ -20,6 +20,7 @@ class WebAppTests(unittest.TestCase):
                 "universe_file": "data/universe_core_v1.txt",
                 "preselect_top": 70,
                 "max_deep": 25,
+                "watch_interval_min": 30,
                 "capital": 15000,
                 "decision_engine": "llm",
                 "paper_enabled": True,
@@ -40,6 +41,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("70", cmd)
         self.assertIn("--max-deep", cmd)
         self.assertIn("25", cmd)
+        self.assertIn("--watch-interval-min", cmd)
+        self.assertIn("30", cmd)
         self.assertIn("--capital", cmd)
         self.assertIn("15000.0", cmd)
         self.assertIn("--decision-engine", cmd)
@@ -71,6 +74,7 @@ class WebAppTests(unittest.TestCase):
                 "universe_file": "data/universe_global_v1.txt",
                 "preselect_top": 10,
                 "max_deep": 5,
+                "watch_interval_min": 30,
                 "decision_engine": "rules",
                 "paper_enabled": False,
                 "no_finbert": False,
@@ -93,6 +97,8 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("--paper-webhook", cmd)
         self.assertIn("--decision-engine", cmd)
         self.assertIn("rules", cmd)
+        self.assertIn("--watch-interval-min", cmd)
+        self.assertIn("30", cmd)
         self.assertIn("--paper-broker", cmd)
         self.assertIn("ibkr", cmd)
         self.assertIn("--ibkr-account", cmd)

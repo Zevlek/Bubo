@@ -59,6 +59,7 @@ L'univers 1000 est pense pour fonctionner avec l'entonnoir du moteur:
 - prescreen large univers,
 - shortlist `BUBO_PRESELECT_TOP`,
 - deep analysis `BUBO_MAX_DEEP`,
+- cadence watch `BUBO_WATCH_INTERVAL_MIN`,
 - budget gate API actif par defaut.
 
 ## Exemples docker-compose (qui marchent)
@@ -90,7 +91,8 @@ services:
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
-      BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
+      BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
+      BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -173,7 +175,8 @@ services:
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
       BUBO_UNIVERSE_FILE: ${BUBO_UNIVERSE_FILE:-data/universe_global_v1.txt}
       BUBO_PRESELECT_TOP: ${BUBO_PRESELECT_TOP:-60}
-      BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-20}
+      BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
+      BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -275,7 +278,8 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_global_v1.txt`) | `data/universe_global_v1.txt` |
 | `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
 | `BUBO_PRESELECT_TOP` | Taille shortlist apres prescan | Non | Entier `>= 1` | `60` |
-| `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `20` |
+| `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `8` |
+| `BUBO_WATCH_INTERVAL_MIN` | Intervalle entre deux cycles en mode watch | Non | Entier `>= 1` (minutes) | `30` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |

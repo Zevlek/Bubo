@@ -133,7 +133,7 @@ class EngineConfig:
 
     # Backtest
     backtest_period_years: int = 2
-    watch_interval_min: int = 15
+    watch_interval_min: int = 30
     use_finbert: bool = True
     decision_engine: str = "llm"  # llm | rules
     paper_broker: str = "local"  # local | ibkr
@@ -2172,6 +2172,12 @@ def main():
                         help="Nombre de tickers gardes apres prescreen")
     parser.add_argument("--max-deep", type=int, default=20,
                         help="Nombre max de tickers pour analyse detaillee")
+    parser.add_argument(
+        "--watch-interval-min",
+        type=int,
+        default=int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30")),
+        help="Intervalle de refresh en mode watch (minutes)",
+    )
     parser.add_argument("--screen-only", action="store_true",
                         help="Ne fait que la preslection et exporte la shortlist")
     parser.add_argument("--no-budget-gate", action="store_true",
@@ -2235,6 +2241,7 @@ def main():
 
     cfg = EngineConfig()
     cfg.initial_capital = args.capital
+    cfg.watch_interval_min = max(1, int(args.watch_interval_min))
     cfg.use_finbert = not args.no_finbert
     cfg.decision_engine = _normalize_decision_engine(args.decision_engine)
     cfg.paper_broker = _normalize_paper_broker(args.paper_broker)
