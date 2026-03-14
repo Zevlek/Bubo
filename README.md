@@ -44,6 +44,7 @@ http://IP_DU_NAS:7654
 - Le diagnostic API/IBKR est manuel et repliable (bouton `Verifier les API` puis `Masquer les API`).
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
 - Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
+- Le mode watch US-only tient compte des jours feries US standards (NYSE/Nasdaq).
 
 ## Build local (sans GHCR)
 

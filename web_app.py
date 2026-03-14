@@ -12,13 +12,13 @@ import time
 import urllib.error
 import urllib.request
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session, url_for
+from market_hours import get_us_market_clock
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -83,12 +83,6 @@ _BROKER_CACHE: dict[str, Any] = {
     "last_ok_report": None,
 }
 
-US_MARKET_TZ = ZoneInfo("America/New_York")
-US_MARKET_OPEN_HOUR = 9
-US_MARKET_OPEN_MINUTE = 30
-US_MARKET_CLOSE_HOUR = 16
-US_MARKET_CLOSE_MINUTE = 0
-
 
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -99,63 +93,6 @@ def _append_log(line: str):
     if not msg:
         return
     _LOGS.append(f"[{_now_text()}] {msg}")
-
-
-def _next_us_open(ref_et: datetime) -> datetime:
-    candidate = ref_et.replace(hour=US_MARKET_OPEN_HOUR, minute=US_MARKET_OPEN_MINUTE, second=0, microsecond=0)
-    if candidate < ref_et:
-        candidate = (candidate + timedelta(days=1)).replace(
-            hour=US_MARKET_OPEN_HOUR,
-            minute=US_MARKET_OPEN_MINUTE,
-            second=0,
-            microsecond=0,
-        )
-    while candidate.weekday() >= 5:
-        candidate = (candidate + timedelta(days=1)).replace(
-            hour=US_MARKET_OPEN_HOUR,
-            minute=US_MARKET_OPEN_MINUTE,
-            second=0,
-            microsecond=0,
-        )
-    return candidate
-
-
-def get_us_market_clock(now_et: datetime | None = None) -> dict[str, Any]:
-    if now_et is None:
-        now_et = datetime.now(US_MARKET_TZ)
-    elif now_et.tzinfo is None:
-        now_et = now_et.replace(tzinfo=US_MARKET_TZ)
-    else:
-        now_et = now_et.astimezone(US_MARKET_TZ)
-
-    today_open = now_et.replace(hour=US_MARKET_OPEN_HOUR, minute=US_MARKET_OPEN_MINUTE, second=0, microsecond=0)
-    today_close = now_et.replace(hour=US_MARKET_CLOSE_HOUR, minute=US_MARKET_CLOSE_MINUTE, second=0, microsecond=0)
-    weekday = now_et.weekday() < 5
-    is_open = weekday and today_open <= now_et < today_close
-
-    if is_open:
-        next_close = today_close
-        next_open = _next_us_open(today_close + timedelta(seconds=1))
-        sec_to_close = max(0, int((next_close - now_et).total_seconds()))
-        sec_to_open = 0
-    else:
-        next_close = None
-        if weekday and now_et < today_open:
-            next_open = today_open
-        else:
-            next_open = _next_us_open(now_et + timedelta(seconds=1))
-        sec_to_open = max(0, int((next_open - now_et).total_seconds()))
-        sec_to_close = None
-
-    return {
-        "time_et": now_et.strftime("%Y-%m-%d %H:%M:%S"),
-        "is_open": bool(is_open),
-        "next_open_et": next_open.strftime("%Y-%m-%d %H:%M:%S"),
-        "next_close_et": next_close.strftime("%Y-%m-%d %H:%M:%S") if next_close else "",
-        "seconds_to_open": sec_to_open,
-        "seconds_to_close": sec_to_close,
-        "note": "Session reguliere NYSE/Nasdaq 09:30-16:00 ET (hors jours feries US).",
-    }
 
 
 def _is_authenticated() -> bool:

@@ -862,8 +862,9 @@
         marketHoursEl.textContent =
           `Marche US: OUVERT | Heure NY: ${m.time_et} | Fermeture: ${m.next_close_et} (dans ${formatDurationFr(m.seconds_to_close)})`;
       } else {
+        const holiday = m.holiday_name ? ` | Motif: ${m.holiday_name}` : "";
         marketHoursEl.textContent =
-          `Marche US: FERME | Heure NY: ${m.time_et} | Reouverture: ${m.next_open_et} (dans ${formatDurationFr(m.seconds_to_open)})`;
+          `Marche US: FERME | Heure NY: ${m.time_et}${holiday} | Reouverture: ${m.next_open_et} (dans ${formatDurationFr(m.seconds_to_open)})`;
       }
     }
 
