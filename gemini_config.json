@@ -1,9 +1,0 @@
-{
-  "api_key": "AIzaSyDaXIjgsJyvum_X2i00rJ6Va32auxgqE1M",
-  "_instructions": [
-    "1. Aller sur https://aistudio.google.com/apikey",
-    "2. Créer une clé API (gratuit)",
-    "3. Coller la clé dans le champ api_key ci-dessus",
-    "Alternative: set GEMINI_API_KEY=ta_clé (variable d'environnement)"
-  ]
-}
