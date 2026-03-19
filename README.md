@@ -46,6 +46,13 @@ http://IP_DU_NAS:7654
 - Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
 - Le mode watch US-only tient compte des jours feries US standards (NYSE/Nasdaq).
 
+## Observabilite (logs JSONL)
+
+- `data/logs/engine_cycle.jsonl`: resume de chaque cycle (decisions, statuts LLM, erreur cycle, metriques paper).
+- `data/logs/llm_calls.jsonl`: detail par ticker (decision, score, confiance, statut/modele/erreur LLM).
+- `data/logs/orders.jsonl`: executions et ordres skips (inclut les raisons IBKR).
+- Le mode LLM est en **fail-closed**: si la reponse LLM est invalide/incomplete, le moteur passe en `NO_DECISION` (plus de `HOLD 50/0` silencieux).
+
 ## Build local (sans GHCR)
 
 ```bash

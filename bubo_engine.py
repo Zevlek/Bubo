@@ -33,7 +33,12 @@ from market_hours import format_duration_compact, get_us_market_clock
 warnings.filterwarnings("ignore")
 os.makedirs("data", exist_ok=True)
 os.makedirs("charts", exist_ok=True)
+os.makedirs("data/logs", exist_ok=True)
 sys.path.insert(0, ".")
+
+ENGINE_CYCLE_LOG_PATH = Path("data/logs/engine_cycle.jsonl")
+LLM_CALLS_LOG_PATH = Path("data/logs/llm_calls.jsonl")
+ORDERS_LOG_PATH = Path("data/logs/orders.jsonl")
 
 # ─────────────────────────────────────────────
 # Import des modules (graceful si absent)
@@ -323,6 +328,13 @@ class ScoringEngine:
 
         data = self.llm_collector.collect(ticker)
         llm = self.llm_brain.analyze(data, dry_run=False)
+        llm_ok = bool(llm.get("_llm_ok", False))
+        llm_status = str(llm.get("_llm_status", "") or "unknown")
+        llm_model = str(llm.get("_llm_model", "") or "")
+        llm_error = str(llm.get("_llm_error", "") or "")
+        if not llm_ok:
+            raise RuntimeError(f"{llm_status}: {llm_error}".strip(": "))
+
         decision = str(llm.get("decision", "HOLD")).strip().upper()
         if decision not in {"BUY", "STRONG BUY", "SELL", "STRONG SELL", "HOLD"}:
             decision = "HOLD"
@@ -370,6 +382,9 @@ class ScoringEngine:
             "position_size_pct": round(position, 3),
             "reasons": reasons,
             "warnings": warnings_list,
+            "llm_status": llm_status,
+            "llm_model": llm_model,
+            "llm_error": llm_error,
         }
 
     def score_ticker(self, ticker: str) -> dict:
@@ -385,6 +400,9 @@ class ScoringEngine:
             "position_size_pct": 0.0,
             "reasons": [],
             "warnings": [],
+            "llm_status": "not_used",
+            "llm_model": "",
+            "llm_error": "",
         }
 
         if self.cfg.decision_engine == "llm":
@@ -397,6 +415,9 @@ class ScoringEngine:
                 result["position_size_pct"] = llm["position_size_pct"]
                 result["reasons"].extend(llm.get("reasons", []))
                 result["warnings"].extend(llm.get("warnings", []))
+                result["llm_status"] = str(llm.get("llm_status", "ok"))
+                result["llm_model"] = str(llm.get("llm_model", ""))
+                result["llm_error"] = str(llm.get("llm_error", ""))
                 return result
             except Exception as e:
                 result["scores"]["llm"] = 50.0
@@ -405,6 +426,8 @@ class ScoringEngine:
                 result["confidence"] = 0.0
                 result["position_size_pct"] = 0.0
                 result["warnings"].append(f"LLM unavailable: {e}")
+                result["llm_status"] = "error"
+                result["llm_error"] = str(e)
                 return result
 
         # â”€â”€ Phase 1: Technique â”€â”€
@@ -1143,6 +1166,9 @@ def display_dashboard(engine: ScoringEngine, tickers: list) -> dict:
         "ticker": tk, "score": r["final_score"], "decision": r["decision"],
         "confidence": r["confidence"], "position_pct": r["position_size_pct"],
         "timestamp": r["timestamp"],
+        "llm_status": r.get("llm_status", ""),
+        "llm_model": r.get("llm_model", ""),
+        "llm_error": r.get("llm_error", ""),
         **{f"score_{k}": v for k, v in r["scores"].items()}
     } for tk, r in results.items()]
     pd.DataFrame(rows).to_csv("data/signals_latest.csv", index=False)
@@ -1172,6 +1198,7 @@ def _new_paper_state(cfg: EngineConfig) -> dict:
         "trades": [],
         "equity_curve": [],
         "action_log": [],
+        "ibkr_empty_sync_streak": 0,
     }
 
 
@@ -1195,6 +1222,7 @@ def load_paper_state(state_path: str, cfg: EngineConfig) -> dict:
         base["equity_curve"] = []
     if not isinstance(base.get("action_log"), list):
         base["action_log"] = []
+    base["ibkr_empty_sync_streak"] = int(base.get("ibkr_empty_sync_streak", 0) or 0)
     base["cash"] = float(base.get("cash", cfg.initial_capital))
     base["equity"] = float(base.get("equity", base["cash"]))
     base["realized_pnl"] = float(base.get("realized_pnl", 0.0))
@@ -1558,6 +1586,134 @@ def notify_paper_webhook(webhook_url: str, summary: dict, watch_mode: bool = Fal
         return False, str(e)
 
 
+def _append_jsonl(path: Path, payload: dict):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        # Logging must never break trading cycle.
+        pass
+
+
+def _extract_ibkr_warning_event(warning: str) -> dict | None:
+    text = str(warning or "").strip()
+    if not text.startswith("IBKR "):
+        return None
+    parts = text.split()
+    if len(parts) < 3:
+        return None
+    side = parts[1].upper()
+    ticker = parts[2].upper()
+    reason = text
+    status = "error"
+    if "skipped:" in text:
+        status = "skipped"
+        reason = text.split("skipped:", 1)[1].strip()
+    return {
+        "broker": "ibkr",
+        "side": side,
+        "ticker": ticker,
+        "status": status,
+        "reason": reason,
+    }
+
+
+def log_cycle_outputs(results: dict,
+                      summary: dict | None = None,
+                      mode: str = "watch",
+                      universe_size: int | None = None,
+                      deep_size: int | None = None,
+                      cycle_error: str = ""):
+    results = results or {}
+    summary = summary or {}
+    ts = _paper_now()
+
+    decision_counts = {}
+    llm_status_counts = {}
+    for row in results.values():
+        decision = str(row.get("decision", "UNKNOWN") or "UNKNOWN").upper()
+        decision_counts[decision] = int(decision_counts.get(decision, 0)) + 1
+        llm_status = str(row.get("llm_status", "") or "n/a")
+        llm_status_counts[llm_status] = int(llm_status_counts.get(llm_status, 0)) + 1
+
+    cycle_row = {
+        "timestamp": ts,
+        "mode": mode,
+        "tickers_analyzed": int(len(results)),
+        "universe_size": int(universe_size) if isinstance(universe_size, int) else None,
+        "deep_size": int(deep_size) if isinstance(deep_size, int) else int(len(results)),
+        "decision_counts": decision_counts,
+        "llm_status_counts": llm_status_counts,
+        "cycle_error": str(cycle_error or ""),
+    }
+    if summary:
+        cycle_row.update({
+            "paper_broker": summary.get("paper_broker"),
+            "equity": summary.get("equity"),
+            "cash": summary.get("cash"),
+            "positions": summary.get("positions"),
+            "actions_count": len(summary.get("actions", []) or []),
+            "warnings_count": len(summary.get("warnings", []) or []),
+        })
+    _append_jsonl(ENGINE_CYCLE_LOG_PATH, cycle_row)
+
+    for ticker, row in results.items():
+        llm_row = {
+            "timestamp": ts,
+            "mode": mode,
+            "ticker": ticker,
+            "decision": row.get("decision"),
+            "score": row.get("final_score"),
+            "confidence": row.get("confidence"),
+            "position_size_pct": row.get("position_size_pct"),
+            "llm_status": row.get("llm_status"),
+            "llm_model": row.get("llm_model"),
+            "llm_error": row.get("llm_error"),
+            "warnings": (row.get("warnings") or [])[:5],
+        }
+        _append_jsonl(LLM_CALLS_LOG_PATH, llm_row)
+
+    if summary:
+        order_events = list(summary.get("order_events", []) or [])
+        if not order_events:
+            for action in summary.get("actions", []) or []:
+                tokens = str(action).split()
+                if len(tokens) < 3:
+                    continue
+                side = tokens[0].upper()
+                ticker = tokens[1].upper()
+                qty = str(tokens[2]).lstrip("xX")
+                try:
+                    qty_int = int(float(qty))
+                except Exception:
+                    qty_int = 0
+                if side not in {"BUY", "SELL"}:
+                    continue
+                order_events.append(
+                    {
+                        "broker": summary.get("paper_broker", "local"),
+                        "side": side,
+                        "ticker": ticker,
+                        "quantity": qty_int,
+                        "status": "filled",
+                        "reason": "",
+                    }
+                )
+        for warning in summary.get("warnings", []) or []:
+            parsed = _extract_ibkr_warning_event(str(warning))
+            if parsed is not None:
+                order_events.append(parsed)
+
+        for event in order_events:
+            row = {
+                "timestamp": ts,
+                "mode": mode,
+                **event,
+            }
+            _append_jsonl(ORDERS_LOG_PATH, row)
+
+
 def _latest_price(engine: ScoringEngine, ticker: str, cache: dict) -> float | None:
     if ticker in cache:
         return cache[ticker]
@@ -1753,8 +1909,10 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
     positions = state["positions"]
     actions = []
+    order_events = []
     warnings_list = []
     price_cache = {}
+    empty_sync_streak = int(state.get("ibkr_empty_sync_streak", 0) or 0)
     ibkr = None
     ibkr_trading_disabled = False
     if broker == "ibkr":
@@ -1795,12 +1953,31 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                         "market_value": float(mv),
                         "unrealized_pnl": float(mv - invested),
                     }
-                positions.clear()
-                positions.update(synced)
+                had_positions = bool(positions)
+                if had_positions and not synced:
+                    empty_sync_streak += 1
+                    if empty_sync_streak >= 2:
+                        positions.clear()
+                        warnings_list.append(
+                            "IBKR sync vide 2 cycles consecutifs: positions locales purgees"
+                        )
+                        empty_sync_streak = 0
+                    else:
+                        warnings_list.append(
+                            "IBKR sync vide transitoire: positions locales conservees (guard)"
+                        )
+                else:
+                    positions.clear()
+                    positions.update(synced)
+                    empty_sync_streak = 0
             else:
                 warnings_list.append(
                     f"IBKR positions sync failed: {sync.get('reason', 'unknown')}"
                 )
+        elif ibkr_positions_policy != "include":
+            empty_sync_streak = 0
+    else:
+        empty_sync_streak = 0
 
     # Build superset for pricing: active signals + currently held positions.
     signal_tickers = set(results.keys()) if results else set()
@@ -1833,8 +2010,20 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     continue
                 order_res = ibkr.place_market_order(ticker, "SELL", int(pos["shares"]))
                 if not order_res.get("ok"):
+                    reason = str(order_res.get("reason", "unknown"))
                     warnings_list.append(
-                        f"IBKR SELL {ticker} skipped: {order_res.get('reason', 'unknown')}"
+                        f"IBKR SELL {ticker} skipped: {reason}"
+                    )
+                    order_events.append(
+                        {
+                            "broker": "ibkr",
+                            "side": "SELL",
+                            "ticker": ticker,
+                            "quantity": int(pos["shares"]),
+                            "filled_shares": 0,
+                            "status": "skipped",
+                            "reason": reason,
+                        }
                     )
                     continue
                 sold_shares = int(order_res.get("filled", pos["shares"]))
@@ -1876,6 +2065,19 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             )
 
             actions.append(f"SELL {ticker} x{int(sold_shares)} ({exit_reason})")
+            order_events.append(
+                {
+                    "broker": broker,
+                    "side": "SELL",
+                    "ticker": ticker,
+                    "quantity": int(pos["shares"]),
+                    "filled_shares": int(sold_shares),
+                    "price": round(float(exec_px), 6),
+                    "commission": round(float(exit_fee), 6),
+                    "status": "filled",
+                    "reason": exit_reason,
+                }
+            )
             del positions[ticker]
 
     def positions_market_value() -> float:
@@ -1944,8 +2146,20 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 continue
             order_res = ibkr.place_market_order(ticker, "BUY", int(shares))
             if not order_res.get("ok"):
+                reason = str(order_res.get("reason", "unknown"))
                 warnings_list.append(
-                    f"IBKR BUY {ticker} skipped: {order_res.get('reason', 'unknown')}"
+                    f"IBKR BUY {ticker} skipped: {reason}"
+                )
+                order_events.append(
+                    {
+                        "broker": "ibkr",
+                        "side": "BUY",
+                        "ticker": ticker,
+                        "quantity": int(shares),
+                        "filled_shares": 0,
+                        "status": "skipped",
+                        "reason": reason,
+                    }
                 )
                 continue
             shares = int(order_res.get("filled", shares))
@@ -1969,6 +2183,19 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             "unrealized_pnl": float((shares * px) - (shares * exec_px + entry_fee)),
         }
         actions.append(f"BUY {ticker} x{shares}")
+        order_events.append(
+            {
+                "broker": broker,
+                "side": "BUY",
+                "ticker": ticker,
+                "quantity": int(shares),
+                "filled_shares": int(shares),
+                "price": round(float(exec_px), 6),
+                "commission": round(float(entry_fee), 6),
+                "status": "filled",
+                "reason": "signal_buy",
+            }
+        )
 
     # Mark-to-market and equity update.
     unrealized = 0.0
@@ -1997,6 +2224,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         state["equity"] = round(state["cash"] + market_value, 4)
     state["updated_at"] = _paper_now()
     state["cycles"] = int(state.get("cycles", 0)) + 1
+    state["ibkr_empty_sync_streak"] = int(empty_sync_streak if broker == "ibkr" else 0)
     for action in actions:
         state["action_log"].append(
             {
@@ -2043,6 +2271,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         "unrealized_pnl": round(unrealized, 4),
         "positions": len(positions),
         "actions": actions,
+        "order_events": order_events,
         "num_closed_trades": metrics["num_closed_trades"],
         "wins": metrics["wins"],
         "losses": metrics["losses"],
@@ -2348,8 +2577,10 @@ def main():
                     continue
 
                 dynamic_info = ""
+                universe_count = None
                 if dynamic_universe:
                     universe = load_universe(args.universe_file)
+                    universe_count = len(universe)
                     selected, shortlist_df, meta = build_deep_analysis_list(
                         cfg=cfg,
                         universe=universe,
@@ -2372,6 +2603,7 @@ def main():
 
                 os.system("cls" if os.name == "nt" else "clear")
                 cycle_results = {}
+                summary = None
                 if engine.cfg.tickers:
                     cycle_results = display_dashboard(engine, engine.cfg.tickers)
                 else:
@@ -2391,6 +2623,14 @@ def main():
                         elif reason not in ("no actions", "webhook not set"):
                             print(f"   Webhook: echec ({reason})")
 
+                log_cycle_outputs(
+                    results=cycle_results,
+                    summary=summary,
+                    mode="watch",
+                    universe_size=universe_count,
+                    deep_size=len(engine.cfg.tickers),
+                )
+
                 if dynamic_info:
                     print(f"\n  {dynamic_info}")
                 wait_s = cfg.watch_interval_min * 60
@@ -2406,11 +2646,20 @@ def main():
                 break
             except Exception as e:
                 print(f"\n  ⚠️ Erreur cycle watch: {e}")
+                log_cycle_outputs(
+                    results={},
+                    summary=None,
+                    mode="watch",
+                    universe_size=None,
+                    deep_size=None,
+                    cycle_error=str(e),
+                )
                 time.sleep(min(60, cfg.watch_interval_min * 60))
 
     else:
         engine = ScoringEngine(cfg)
         results = display_dashboard(engine, cfg.tickers)
+        summary = None
         if args.paper:
             summary = run_paper_cycle(engine, results, paper_state_path)
             print_paper_summary(summary)
@@ -2420,6 +2669,13 @@ def main():
                     print("   Webhook: alerte envoyee")
                 elif reason not in ("no actions", "webhook not set"):
                     print(f"   Webhook: echec ({reason})")
+        log_cycle_outputs(
+            results=results,
+            summary=summary,
+            mode="single",
+            universe_size=len(cfg.tickers),
+            deep_size=len(cfg.tickers),
+        )
 
 
 if __name__ == "__main__":

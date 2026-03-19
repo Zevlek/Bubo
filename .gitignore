@@ -8,4 +8,5 @@ gemini_config.json
 charts/*
 data/news_cache/
 data/social_cache/
+data/logs/
 data/*.csv

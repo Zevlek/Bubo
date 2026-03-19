@@ -28,6 +28,7 @@ import json
 import os
 import re
 import time
+import html
 import hashlib
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -125,6 +126,28 @@ TICKER_SEARCH_MAP = {
         "sector": "defense_us"
     },
 }
+
+
+def _looks_mojibake(text: str) -> bool:
+    if not text:
+        return False
+    hints = ("Ã", "â€™", "â€œ", "â€", "Â", "ðŸ")
+    return any(h in text for h in hints)
+
+
+def _clean_text(value: str, max_len: int = 0) -> str:
+    text = html.unescape(str(value or ""))
+    if _looks_mojibake(text):
+        try:
+            repaired = text.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+            if repaired:
+                text = repaired
+        except Exception:
+            pass
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_len and max_len > 0:
+        text = text[:max_len]
+    return text
 
 
 def generate_config_template(path: str = "social_config.json"):
@@ -294,8 +317,8 @@ class RedditFetcher:
                     post = {
                         "source": "reddit",
                         "subreddit": sub_name,
-                        "title": submission.title,
-                        "text": (submission.selftext or "")[:500],
+                        "title": _clean_text(submission.title, 300),
+                        "text": _clean_text(submission.selftext or "", 500),
                         "score": submission.score,
                         "num_comments": submission.num_comments,
                         "created_at": created.isoformat(),
@@ -324,8 +347,8 @@ class RedditFetcher:
                                     posts.append({
                                         "source": "reddit_comment",
                                         "subreddit": sub_name,
-                                        "title": f"Re: {submission.title[:80]}",
-                                        "text": ctext[:500],
+                                        "title": _clean_text(f"Re: {submission.title[:80]}", 120),
+                                        "text": _clean_text(ctext, 500),
                                         "score": comment.score,
                                         "num_comments": 0,
                                         "created_at": datetime.fromtimestamp(
@@ -373,7 +396,7 @@ class RedditFetcher:
                         "Accept": "application/json"
                     })
                     with urllib.request.urlopen(req, timeout=10) as resp:
-                        data = json.loads(resp.read().decode())
+                        data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
                     for child in data.get("data", {}).get("children", []):
                         d = child.get("data", {})
@@ -392,8 +415,8 @@ class RedditFetcher:
                         posts.append({
                             "source": "reddit",
                             "subreddit": sub_name,
-                            "title": title,
-                            "text": (d.get("selftext", "") or "")[:500],
+                            "title": _clean_text(title, 300),
+                            "text": _clean_text((d.get("selftext", "") or ""), 500),
                             "score": score,
                             "num_comments": d.get("num_comments", 0),
                             "created_at": created.isoformat(),
@@ -515,7 +538,7 @@ class StocktwitsFetcher:
                 "Accept": "application/json"
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
             for msg in data.get("messages", []):
                 created_str = msg.get("created_at", "")
@@ -541,7 +564,7 @@ class StocktwitsFetcher:
                 post = {
                     "source": "stocktwits",
                     "title": "",
-                    "text": msg.get("body", "")[:500],
+                    "text": _clean_text(msg.get("body", ""), 500),
                     "score": like_count,
                     "num_comments": msg.get("conversation", {}).get("replies", 0)
                         if msg.get("conversation") else 0,
@@ -582,7 +605,7 @@ class StocktwitsFetcher:
                     "Accept": "application/json"
                 })
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
+                    data = json.loads(resp.read().decode("utf-8", errors="replace"))
 
                 for r in data.get("results", [])[:2]:
                     sym = r.get("symbol", "")

@@ -377,6 +377,15 @@ class GeminiBrain:
         if api_key:
             self._init_client()
 
+    def _attach_meta(self, payload: dict, ok: bool, status: str,
+                     model: str = "", error: str = "") -> dict:
+        out = dict(payload or {})
+        out["_llm_ok"] = bool(ok)
+        out["_llm_status"] = str(status or ("ok" if ok else "error"))
+        out["_llm_model"] = str(model or "")
+        out["_llm_error"] = str(error or "")
+        return out
+
     def _init_client(self):
         try:
             from google import genai
@@ -399,13 +408,18 @@ class GeminiBrain:
             print(prompt[:3000])
             if len(prompt) > 3000:
                 print(f"\n  [...{len(prompt) - 3000} chars tronqués...]")
-            return self._default(ticker)
+            return self._default(ticker, status="dry_run", error="dry_run")
 
         if not self.client:
-            return self._default(ticker)
+            return self._default(
+                ticker,
+                status="client_unavailable",
+                error="Gemini client indisponible",
+            )
 
         # Essayer chaque modèle avec retry
         from google.genai import types
+        last_error = ""
         for model in GEMINI_MODELS:
             for attempt in range(3):
                 try:
@@ -423,10 +437,11 @@ class GeminiBrain:
                         pass  # Premier essai, pas besoin de log
                     else:
                         print(f"    ✅ {model} (tentative {attempt + 1})")
-                    return self._parse(response.text, ticker)
+                    return self._parse(response.text, ticker, model=model)
 
                 except Exception as e:
                     err_str = str(e)
+                    last_error = f"{model}: {err_str}"
                     if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
                         if attempt < 2:
                             wait = 10 * (attempt + 1)
@@ -441,7 +456,11 @@ class GeminiBrain:
                         break
 
         print(f"    ❌ Tous les modèles ont échoué pour {ticker}")
-        return self._default(ticker)
+        return self._default(
+            ticker,
+            status="api_error",
+            error=(last_error or "all_models_failed"),
+        )
 
     def _build_prompt(self, data: dict) -> str:
         ticker = data["ticker"]
@@ -487,7 +506,7 @@ class GeminiBrain:
         parts.append(f"\nDécision JSON pour {ticker}:")
         return "\n".join(parts)
 
-    def _parse(self, text: str, ticker: str) -> dict:
+    def _parse(self, text: str, ticker: str, model: str = "") -> dict:
         try:
             clean = text.strip()
             # Enlever les backticks markdown si présents
@@ -498,40 +517,20 @@ class GeminiBrain:
             clean = clean.strip()
 
             result = json.loads(clean)
-            return self._validate(result, ticker)
+            return self._validate(result, ticker, status="ok", model=model)
 
         except json.JSONDecodeError:
-            # Fallback: JSON tronqué — extraire les champs essentiels avec regex
-            import re
-            r = self._default(ticker)
-            try:
-                m = re.search(r'"decision"\s*:\s*"(\w[\w ]*)"', text)
-                if m:
-                    r["decision"] = m.group(1).upper()
-                m = re.search(r'"score"\s*:\s*(\d+)', text)
-                if m:
-                    r["score"] = int(m.group(1))
-                m = re.search(r'"confidence"\s*:\s*(\d+)', text)
-                if m:
-                    r["confidence"] = int(m.group(1))
-                m = re.search(r'"position_size_pct"\s*:\s*([\d.]+)', text)
-                if m:
-                    r["position_size_pct"] = float(m.group(1))
-                m = re.search(r'"raisonnement"\s*:\s*"([^"]*)"', text)
-                if m:
-                    r["raisonnement"] = m.group(1)
-
-                # Si on a au moins decision + score, c'est exploitable
-                if r["decision"] != "HOLD" or r["score"] != 50:
-                    print(f"    ⚠️  JSON tronqué — récupération partielle OK")
-                    return self._validate(r, ticker)
-            except Exception:
-                pass
-
             print(f"    ⚠️  Parse échoué: {text[:200]}")
-            return self._default(ticker)
+            snippet = str(text or "").replace("\n", " ").replace("\r", " ")
+            return self._default(
+                ticker,
+                status="parse_failed",
+                model=model,
+                error=f"JSON invalide: {snippet[:180]}",
+            )
 
-    def _validate(self, result: dict, ticker: str) -> dict:
+    def _validate(self, result: dict, ticker: str, status: str = "ok",
+                  model: str = "", error: str = "") -> dict:
         """Normalise et valide un résultat."""
         result.setdefault("ticker", ticker)
         result.setdefault("decision", "HOLD")
@@ -547,14 +546,30 @@ class GeminiBrain:
         result["position_size_pct"] = max(0, min(0.25, result["position_size_pct"]))
 
         if result["decision"] not in ("BUY", "SELL", "HOLD", "STRONG BUY", "STRONG SELL"):
-            result["decision"] = "HOLD"
+            return self._default(
+                ticker,
+                status="invalid_decision",
+                model=model,
+                error=f"decision invalide: {result.get('decision')}",
+            )
 
-        return result
+        return self._attach_meta(result, ok=True, status=status, model=model, error=error)
 
-    def _default(self, ticker: str) -> dict:
-        return {"ticker": ticker, "decision": "HOLD", "score": 50, "confidence": 0,
-                "position_size_pct": 0.0, "stop_loss": None, "take_profit": None,
-                "raisonnement": "Analyse indisponible", "signaux_cles": [], "risques": []}
+    def _default(self, ticker: str, status: str = "default",
+                 error: str = "", model: str = "") -> dict:
+        payload = {
+            "ticker": ticker,
+            "decision": "HOLD",
+            "score": 50,
+            "confidence": 0,
+            "position_size_pct": 0.0,
+            "stop_loss": None,
+            "take_profit": None,
+            "raisonnement": "Analyse indisponible",
+            "signaux_cles": [],
+            "risques": [],
+        }
+        return self._attach_meta(payload, ok=False, status=status, model=model, error=error)
 
 
 # ─────────────────────────────────────────────
