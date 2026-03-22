@@ -311,7 +311,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_us_1000_v1.txt`) | `data/universe_us_1000_v1.txt` |
 | `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
 | `BUBO_GEMINI_MODEL_CHAIN` | Liste des modeles Gemini essayes (ordre de fallback) | Non | Liste separee par virgules (ex: `gemini-2.5-flash` ou `gemini-2.5-flash,gemini-2.5-pro`) | `gemini-2.5-flash` |
-| `BUBO_GEMINI_MAX_OUTPUT_TOKENS` | Limite de tokens de sortie par decision LLM | Non | Entier `128..2048` | `700` |
+| `BUBO_GEMINI_MAX_OUTPUT_TOKENS` | Limite de tokens de sortie par decision LLM | Non | Entier `256..2048` | `700` |
 | `BUBO_GEMINI_PROMPT_MAX_EVENTS` | Nombre max d'evenements inclus dans le prompt | Non | Entier `0..10` | `4` |
 | `BUBO_GEMINI_PROMPT_MAX_HEADLINES` | Nombre max de headlines news dans le prompt | Non | Entier `0..10` | `3` |
 | `BUBO_GEMINI_PROMPT_MAX_POSTS` | Nombre max de posts sociaux dans le prompt | Non | Entier `0..10` | `2` |
@@ -362,6 +362,7 @@ Notes compatibilite:
 - Le code accepte aussi `STOCKTWITS_BASE_URL` et `STOCKTWITS_TEST_SYMBOL` en alternatives a `BUBO_STOCKTWITS_*`.
 - Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur renvoie `NO_DECISION` (aucun trade).
 - Au demarrage, le log affiche les modeles Gemini utilises et `max_output_tokens`.
+- Si tu vois beaucoup de `llm_error=parse_failed`/`truncated`, commence par monter `BUBO_GEMINI_MAX_OUTPUT_TOKENS` (>= `256`, recommande `700`).
 
 ## Test paper trading IBKR
 

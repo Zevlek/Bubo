@@ -24,6 +24,7 @@ Usage:
 import sys
 import os
 import json
+import re
 import time
 import argparse
 import warnings
@@ -98,7 +99,13 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 
 GEMINI_MODELS = _parse_model_chain(os.environ.get("BUBO_GEMINI_MODEL_CHAIN", "gemini-2.5-flash"))
-GEMINI_MAX_OUTPUT_TOKENS = _env_int("BUBO_GEMINI_MAX_OUTPUT_TOKENS", 700, 128, 2048)
+MIN_SAFE_OUTPUT_TOKENS = 256
+GEMINI_MAX_OUTPUT_TOKENS = _env_int(
+    "BUBO_GEMINI_MAX_OUTPUT_TOKENS",
+    700,
+    MIN_SAFE_OUTPUT_TOKENS,
+    2048,
+)
 PROMPT_MAX_EVENTS = _env_int("BUBO_GEMINI_PROMPT_MAX_EVENTS", 4, 0, 10)
 PROMPT_MAX_HEADLINES = _env_int("BUBO_GEMINI_PROMPT_MAX_HEADLINES", 3, 0, 10)
 PROMPT_MAX_POSTS = _env_int("BUBO_GEMINI_PROMPT_MAX_POSTS", 2, 0, 10)
@@ -122,7 +129,12 @@ RÈGLES DE DÉCISION:
 - Stop loss: 2%, Take profit: 10% (ratio risque/reward 1:5)
 - Capital: 10 000€, max 25% par position, max 3 positions simultanées
 
-RÉPONSE OBLIGATOIRE en JSON strict (pas de texte avant/après, pas de markdown):
+RÉPONSE OBLIGATOIRE en JSON strict:
+- pas de texte avant/après, pas de markdown, pas de bloc ```json
+- réponse compacte pour limiter les coûts/tokens
+- "raisonnement": <= 160 caractères
+- "signaux_cles": max 2 éléments courts
+- "risques": max 2 éléments courts
 {
     "ticker": "XXX",
     "decision": "BUY ou SELL ou HOLD",
@@ -131,8 +143,8 @@ RÉPONSE OBLIGATOIRE en JSON strict (pas de texte avant/après, pas de markdown)
     "position_size_pct": 0.0-0.25,
     "stop_loss": prix_exact_ou_null,
     "take_profit": prix_exact_ou_null,
-    "raisonnement": "Explication détaillée en 2-3 phrases. Mentionne les convergences/divergences.",
-    "signaux_cles": ["signal1", "signal2", "signal3"],
+    "raisonnement": "Explication synthétique.",
+    "signaux_cles": ["signal1", "signal2"],
     "risques": ["risque1", "risque2"]
 }"""
 
@@ -390,6 +402,17 @@ class GeminiBrain:
         try:
             from google import genai
             self.client = genai.Client(api_key=self.api_key)
+            raw_tokens = str(os.environ.get("BUBO_GEMINI_MAX_OUTPUT_TOKENS", "")).strip()
+            if raw_tokens:
+                try:
+                    raw_value = int(raw_tokens)
+                    if raw_value < MIN_SAFE_OUTPUT_TOKENS:
+                        print(
+                            f"  ⚠️  BUBO_GEMINI_MAX_OUTPUT_TOKENS={raw_value} "
+                            f"trop bas, plancher de sécurité={MIN_SAFE_OUTPUT_TOKENS}"
+                        )
+                except Exception:
+                    pass
             print(
                 "  ✅ Gemini connecté "
                 f"(modèles: {', '.join(GEMINI_MODELS)} | max_output_tokens={GEMINI_MAX_OUTPUT_TOKENS})"
@@ -437,7 +460,14 @@ class GeminiBrain:
                         pass  # Premier essai, pas besoin de log
                     else:
                         print(f"    ✅ {model} (tentative {attempt + 1})")
-                    return self._parse(response.text, ticker, model=model)
+                    finish_reason = self._extract_finish_reason(response)
+                    response_text = self._extract_response_text(response)
+                    return self._parse(
+                        response_text,
+                        ticker,
+                        model=model,
+                        finish_reason=finish_reason,
+                    )
 
                 except Exception as e:
                     err_str = str(e)
@@ -506,32 +536,134 @@ class GeminiBrain:
         parts.append(f"\nDécision JSON pour {ticker}:")
         return "\n".join(parts)
 
-    def _parse(self, text: str, ticker: str, model: str = "") -> dict:
-        try:
-            clean = text.strip()
-            # Enlever les backticks markdown si présents
-            if clean.startswith("```"):
-                clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
-            if clean.endswith("```"):
-                clean = clean[:-3]
-            clean = clean.strip()
+    def _extract_response_text(self, response) -> str:
+        text = str(getattr(response, "text", "") or "").strip()
+        if text:
+            return text
 
-            result = json.loads(clean)
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return ""
+
+        parts = []
+        first = candidates[0]
+        content = getattr(first, "content", None)
+        chunk_list = getattr(content, "parts", None) or []
+        for part in chunk_list:
+            segment = str(getattr(part, "text", "") or "")
+            if segment:
+                parts.append(segment)
+        return "".join(parts).strip()
+
+    def _extract_finish_reason(self, response) -> str:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return ""
+        reason = getattr(candidates[0], "finish_reason", "")
+        return str(reason or "")
+
+    @staticmethod
+    def _strip_markdown_fence(text: str) -> str:
+        clean = str(text or "").strip()
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+        if clean.endswith("```"):
+            clean = clean[:-3]
+        return clean.strip()
+
+    @staticmethod
+    def _extract_json_block(text: str) -> str:
+        clean = GeminiBrain._strip_markdown_fence(text)
+        if not clean:
+            return ""
+
+        start = clean.find("{")
+        if start < 0:
+            return clean
+        end = clean.rfind("}")
+        if end >= start:
+            return clean[start:end + 1].strip()
+        return clean[start:].strip()
+
+    @staticmethod
+    def _repair_json_candidate(candidate: str) -> str:
+        text = str(candidate or "").strip()
+        if not text:
+            return text
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        text = re.sub(r",\s*$", "", text)
+        missing_brackets = text.count("[") - text.count("]")
+        missing_braces = text.count("{") - text.count("}")
+        if missing_brackets > 0:
+            text += "]" * missing_brackets
+        if missing_braces > 0:
+            text += "}" * missing_braces
+        return text
+
+    @staticmethod
+    def _looks_truncated(candidate: str, json_error: Exception, finish_reason: str = "") -> bool:
+        reason = str(finish_reason or "").upper()
+        if "MAX_TOKENS" in reason:
+            return True
+        msg = str(json_error or "")
+        text = str(candidate or "").rstrip()
+        if "Unterminated string" in msg:
+            return True
+        if text.endswith((",", ":", "\"", "[", "{")):
+            return True
+        if text.count("{") > text.count("}") or text.count("[") > text.count("]"):
+            return True
+        return False
+
+    def _parse(self, text: str, ticker: str, model: str = "", finish_reason: str = "") -> dict:
+        try:
+            candidate = self._extract_json_block(text)
+            if not candidate:
+                return self._default(
+                    ticker,
+                    status="empty_response",
+                    model=model,
+                    error="Réponse LLM vide",
+                )
+
+            try:
+                result = json.loads(candidate)
+            except json.JSONDecodeError:
+                repaired = self._repair_json_candidate(candidate)
+                result = json.loads(repaired)
             return self._validate(result, ticker, status="ok", model=model)
 
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             print(f"    ⚠️  Parse échoué: {text[:200]}")
             snippet = str(text or "").replace("\n", " ").replace("\r", " ")
+            status = "truncated" if self._looks_truncated(
+                candidate=snippet,
+                json_error=e,
+                finish_reason=finish_reason,
+            ) else "parse_failed"
+            detail = f"{e.msg} (col={getattr(e, 'colno', '?')})"
+            if finish_reason:
+                detail += f" | finish_reason={finish_reason}"
             return self._default(
                 ticker,
-                status="parse_failed",
+                status=status,
                 model=model,
-                error=f"JSON invalide: {snippet[:180]}",
+                error=f"JSON invalide: {detail} | {snippet[:180]}",
             )
 
     def _validate(self, result: dict, ticker: str, status: str = "ok",
                   model: str = "", error: str = "") -> dict:
         """Normalise et valide un résultat."""
+        required_keys = ("decision", "score", "confidence", "position_size_pct")
+        missing = [k for k in required_keys if k not in result]
+        if missing:
+            return self._default(
+                ticker,
+                status="incomplete_payload",
+                model=model,
+                error=f"Champs manquants: {', '.join(missing)}",
+            )
+
         result.setdefault("ticker", ticker)
         result.setdefault("decision", "HOLD")
         result.setdefault("score", 50)
@@ -541,9 +673,22 @@ class GeminiBrain:
         result.setdefault("signaux_cles", [])
         result.setdefault("risques", [])
 
-        result["score"] = max(0, min(100, result["score"]))
-        result["confidence"] = max(0, min(100, result["confidence"]))
-        result["position_size_pct"] = max(0, min(0.25, result["position_size_pct"]))
+        try:
+            score = float(result["score"])
+        except Exception:
+            score = 50.0
+        try:
+            confidence = float(result["confidence"])
+        except Exception:
+            confidence = 0.0
+        try:
+            position_pct = float(result["position_size_pct"])
+        except Exception:
+            position_pct = 0.0
+
+        result["score"] = max(0.0, min(100.0, score))
+        result["confidence"] = max(0.0, min(100.0, confidence))
+        result["position_size_pct"] = max(0.0, min(0.25, position_pct))
 
         if result["decision"] not in ("BUY", "SELL", "HOLD", "STRONG BUY", "STRONG SELL"):
             return self._default(
