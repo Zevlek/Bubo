@@ -535,6 +535,7 @@ def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool 
         "config": {
             "paper_enabled": cfg.get("paper_enabled"),
             "paper_broker": cfg.get("paper_broker"),
+            "allow_short": cfg.get("allow_short"),
             "paper_state": cfg.get("paper_state"),
             "ibkr_host": cfg.get("ibkr_host"),
             "ibkr_port": cfg.get("ibkr_port"),
@@ -953,6 +954,7 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
                     "decision_engine": cfg.get("decision_engine"),
                     "paper_enabled": cfg.get("paper_enabled"),
                     "paper_broker": cfg.get("paper_broker"),
+                    "allow_short": cfg.get("allow_short"),
                     "ibkr_host": cfg.get("ibkr_host"),
                     "ibkr_port": cfg.get("ibkr_port"),
                     "stocktwits_base_url": STOCKTWITS_BASE_URL,
@@ -974,6 +976,7 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
             "decision_engine": cfg.get("decision_engine"),
             "paper_enabled": cfg.get("paper_enabled"),
             "paper_broker": cfg.get("paper_broker"),
+            "allow_short": cfg.get("allow_short"),
             "ibkr_host": cfg.get("ibkr_host"),
             "ibkr_port": cfg.get("ibkr_port"),
             "stocktwits_base_url": STOCKTWITS_BASE_URL,
@@ -991,6 +994,7 @@ def get_default_config() -> dict[str, Any]:
         "watch_interval_min": _coerce_int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30"), 30, minimum=1),
         "us_market_only": _env_bool("BUBO_US_MARKET_ONLY", True),
         "capital": _coerce_float(os.getenv("BUBO_CAPITAL", "10000"), 10000.0, minimum=1.0),
+        "allow_short": _env_bool("BUBO_ALLOW_SHORT", False),
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),
         "paper_state": os.getenv("BUBO_PAPER_STATE", "data/paper_portfolio_state.json"),
         "paper_webhook": os.getenv("BUBO_PAPER_WEBHOOK", ""),
@@ -1044,6 +1048,7 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     cfg["us_market_only"] = _coerce_bool(payload.get("us_market_only"), cfg["us_market_only"])
     cfg["capital"] = _coerce_float(payload.get("capital", cfg["capital"]), cfg["capital"], minimum=1.0)
+    cfg["allow_short"] = _coerce_bool(payload.get("allow_short"), cfg["allow_short"])
     cfg["ibkr_port"] = _coerce_int(payload.get("ibkr_port", cfg["ibkr_port"]), cfg["ibkr_port"], minimum=1)
     cfg["ibkr_client_id"] = _coerce_int(payload.get("ibkr_client_id", cfg["ibkr_client_id"]), cfg["ibkr_client_id"], minimum=1)
     cfg["ibkr_capital_limit"] = _coerce_float(
@@ -1090,6 +1095,10 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.append("--no-us-market-only")
 
     cmd.extend(["--capital", str(cfg["capital"])])
+    if cfg["allow_short"]:
+        cmd.append("--allow-short")
+    else:
+        cmd.append("--no-allow-short")
 
     if cfg["paper_enabled"]:
         cmd.append("--paper")

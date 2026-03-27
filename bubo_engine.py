@@ -333,7 +333,11 @@ class ScoringEngine:
         llm_model = str(llm.get("_llm_model", "") or "")
         llm_error = str(llm.get("_llm_error", "") or "")
         if not llm_ok:
-            raise RuntimeError(f"{llm_status}: {llm_error}".strip(": "))
+            err = RuntimeError(f"{llm_status}: {llm_error}".strip(": "))
+            setattr(err, "llm_status", llm_status)
+            setattr(err, "llm_model", llm_model)
+            setattr(err, "llm_error", llm_error)
+            raise err
 
         decision = str(llm.get("decision", "HOLD")).strip().upper()
         if decision not in {"BUY", "STRONG BUY", "SELL", "STRONG SELL", "HOLD"}:
@@ -345,7 +349,9 @@ class ScoringEngine:
         confidence = max(0.0, min(100.0, confidence))
 
         position = float(llm.get("position_size_pct", 0.0) or 0.0)
-        if decision in {"BUY", "STRONG BUY"}:
+        is_long_entry = decision in {"BUY", "STRONG BUY"}
+        is_short_entry = self.cfg.allow_short and decision in {"SELL", "STRONG SELL"}
+        if is_long_entry or is_short_entry:
             position = max(self.cfg.min_position_pct, min(self.cfg.max_position_pct, position))
         else:
             position = 0.0
@@ -426,8 +432,9 @@ class ScoringEngine:
                 result["confidence"] = 0.0
                 result["position_size_pct"] = 0.0
                 result["warnings"].append(f"LLM unavailable: {e}")
-                result["llm_status"] = "error"
-                result["llm_error"] = str(e)
+                result["llm_status"] = str(getattr(e, "llm_status", "error") or "error")
+                result["llm_model"] = str(getattr(e, "llm_model", "") or "")
+                result["llm_error"] = str(getattr(e, "llm_error", str(e)) or str(e))
                 return result
 
         # â”€â”€ Phase 1: Technique â”€â”€
@@ -1042,25 +1049,35 @@ def apply_portfolio_risk_gates(cfg: EngineConfig, results: dict) -> dict:
 
     candidates = []
 
-    # Gate 1: minimum confidence for long entries.
+    # Gate 1: minimum confidence for entries (long + optional short).
     for r in results.values():
-        if r.get("decision") in ("BUY", "STRONG BUY"):
-            conf = float(r.get("confidence", 0.0))
-            if conf < cfg.min_confidence_for_entry:
-                force_hold(r, f"confidence {conf:.1f}% < {cfg.min_confidence_for_entry:.1f}%")
-                summary["blocked"] += 1
-                continue
-            pos = float(r.get("position_size_pct", 0.0) or 0.0)
-            if pos <= 0:
-                force_hold(r, "non-positive position size")
-                summary["blocked"] += 1
-                continue
-            candidates.append(r)
+        decision = str(r.get("decision", "") or "").upper()
+        is_long = decision in ("BUY", "STRONG BUY")
+        is_short = cfg.allow_short and decision in ("SELL", "STRONG SELL")
+        if not (is_long or is_short):
+            continue
+        conf = float(r.get("confidence", 0.0))
+        if conf < cfg.min_confidence_for_entry:
+            force_hold(r, f"confidence {conf:.1f}% < {cfg.min_confidence_for_entry:.1f}%")
+            summary["blocked"] += 1
+            continue
+        pos = float(r.get("position_size_pct", 0.0) or 0.0)
+        if pos <= 0:
+            force_hold(r, "non-positive position size")
+            summary["blocked"] += 1
+            continue
+        candidates.append(r)
 
     # Highest-quality candidates are allocated first.
+    def _entry_priority(item: dict) -> tuple[float, float]:
+        score = float(item.get("final_score", 50.0) or 50.0)
+        decision = str(item.get("decision", "") or "").upper()
+        if cfg.allow_short and decision in {"SELL", "STRONG SELL"}:
+            score = 100.0 - score
+        return score, float(item.get("confidence", 0.0) or 0.0)
+
     candidates.sort(
-        key=lambda x: (float(x.get("final_score", 50.0)),
-                       float(x.get("confidence", 0.0))),
+        key=_entry_priority,
         reverse=True,
     )
 
@@ -1859,7 +1876,9 @@ class IBKRPaperAdapter:
                 qty = int(getattr(row, "position", 0) or 0)
             except Exception:
                 qty = 0
-            if qty <= 0:
+            if qty == 0:
+                continue
+            if qty < 0 and not self.cfg.allow_short:
                 continue
             try:
                 avg_cost = float(getattr(row, "avgCost", 0.0) or 0.0)
@@ -1887,7 +1906,7 @@ class IBKRPaperAdapter:
 def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> dict:
     """
     Execute one paper-trading cycle from current signals.
-    Long-only, with slippage/fees and persistent state.
+    Long/short paper trading with slippage/fees and persistent state.
     """
     cfg = engine.cfg
     state = load_paper_state(state_path, cfg)
@@ -1932,7 +1951,9 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                         continue
                     ticker = str(p.get("ticker", "")).strip().upper()
                     shares = int(p.get("shares", 0) or 0)
-                    if not ticker or shares <= 0:
+                    if not ticker or shares == 0:
+                        continue
+                    if shares < 0 and not cfg.allow_short:
                         continue
                     prev = positions.get(ticker, {}) if isinstance(positions, dict) else {}
                     entry_fee = float(prev.get("entry_fee", 0.0) or 0.0)
@@ -1941,17 +1962,18 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     last_price = float(p.get("market_price", 0.0) or 0.0)
                     if last_price <= 0:
                         last_price = avg_cost if avg_cost > 0 else 0.0
+                    abs_qty = abs(int(shares))
                     mv = float(shares * last_price)
-                    invested = float(shares * avg_cost + entry_fee)
+                    upnl = float((shares * (last_price - avg_cost)) - entry_fee)
                     synced[ticker] = {
                         "ticker": ticker,
-                        "shares": shares,
+                        "shares": int(shares),
                         "entry_price": float(avg_cost),
                         "entry_fee": float(entry_fee),
                         "entry_date": entry_date,
                         "last_price": float(last_price),
                         "market_value": float(mv),
-                        "unrealized_pnl": float(mv - invested),
+                        "unrealized_pnl": float(upnl),
                     }
                 had_positions = bool(positions)
                 if had_positions and not synced:
@@ -1985,61 +2007,94 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     all_tickers = sorted(signal_tickers | held_tickers)
     prices = {tk: _latest_price(engine, tk, price_cache) for tk in all_tickers}
 
+    def _signed_shares(pos_row: dict[str, Any]) -> int:
+        try:
+            return int(pos_row.get("shares", 0) or 0)
+        except Exception:
+            return 0
+
+    def _abs_shares(pos_row: dict[str, Any]) -> int:
+        return abs(_signed_shares(pos_row))
+
+    def _is_short(pos_row: dict[str, Any]) -> bool:
+        return _signed_shares(pos_row) < 0
+
     # Exit logic first.
     for ticker in list(positions.keys()):
         pos = positions[ticker]
+        signed_qty = _signed_shares(pos)
+        if signed_qty == 0:
+            del positions[ticker]
+            continue
+        is_short = _is_short(pos)
+        qty = abs(signed_qty)
         px = prices.get(ticker)
         if px is None or px <= 0:
             continue
 
-        decision = (results.get(ticker, {}) or {}).get("decision", "HOLD")
+        decision = str((results.get(ticker, {}) or {}).get("decision", "HOLD") or "HOLD").strip().upper()
         exit_reason = None
-        if decision in ("SELL", "STRONG SELL"):
-            exit_reason = "signal_sell"
-        elif px <= pos["entry_price"] * (1 - cfg.stop_loss_pct):
-            exit_reason = "stop_loss"
-        elif px >= pos["entry_price"] * (1 + cfg.take_profit_pct):
-            exit_reason = "take_profit"
+        entry_price = float(pos.get("entry_price", 0.0) or 0.0)
+        if is_short:
+            if decision in ("BUY", "STRONG BUY"):
+                exit_reason = "signal_buy_to_cover"
+            elif entry_price > 0 and px >= entry_price * (1 + cfg.stop_loss_pct):
+                exit_reason = "stop_loss"
+            elif entry_price > 0 and px <= entry_price * (1 - cfg.take_profit_pct):
+                exit_reason = "take_profit"
+        else:
+            if decision in ("SELL", "STRONG SELL"):
+                exit_reason = "signal_sell"
+            elif entry_price > 0 and px <= entry_price * (1 - cfg.stop_loss_pct):
+                exit_reason = "stop_loss"
+            elif entry_price > 0 and px >= entry_price * (1 + cfg.take_profit_pct):
+                exit_reason = "take_profit"
 
         if exit_reason:
-            exec_px = px * (1 - slippage_rate)
+            order_side = "BUY" if is_short else "SELL"
+            exec_px = px * (1 + slippage_rate if is_short else 1 - slippage_rate)
             exit_fee = 0.0
-            sold_shares = int(pos["shares"])
+            filled_shares = int(qty)
             if broker == "ibkr":
                 if ibkr is None or ibkr_trading_disabled:
                     continue
-                order_res = ibkr.place_market_order(ticker, "SELL", int(pos["shares"]))
+                order_res = ibkr.place_market_order(ticker, order_side, int(qty))
                 if not order_res.get("ok"):
                     reason = str(order_res.get("reason", "unknown"))
                     warnings_list.append(
-                        f"IBKR SELL {ticker} skipped: {reason}"
+                        f"IBKR {order_side} {ticker} skipped: {reason}"
                     )
                     order_events.append(
                         {
                             "broker": "ibkr",
-                            "side": "SELL",
+                            "side": order_side,
                             "ticker": ticker,
-                            "quantity": int(pos["shares"]),
+                            "quantity": int(qty),
                             "filled_shares": 0,
                             "status": "skipped",
                             "reason": reason,
                         }
                     )
                     continue
-                sold_shares = int(order_res.get("filled", pos["shares"]))
+                filled_shares = int(order_res.get("filled", qty))
                 exec_px = float(order_res.get("avg_fill_price", exec_px) or exec_px)
                 exit_fee = float(order_res.get("commission", 0.0) or 0.0)
             else:
-                gross_for_fee = pos["shares"] * exec_px
+                gross_for_fee = qty * exec_px
                 exit_fee = gross_for_fee * fee_rate
 
-            gross = sold_shares * exec_px
-            net_credit = gross - exit_fee
-            state["cash"] += net_credit
+            if is_short:
+                buyback_cost = (filled_shares * exec_px) + exit_fee
+                state["cash"] -= buyback_cost
+                entry_credit = (qty * entry_price) - float(pos.get("entry_fee", 0.0) or 0.0)
+                pnl = entry_credit - buyback_cost
+            else:
+                gross = filled_shares * exec_px
+                net_credit = gross - exit_fee
+                state["cash"] += net_credit
+                entry_cost = (qty * entry_price) + float(pos.get("entry_fee", 0.0) or 0.0)
+                pnl = net_credit - entry_cost
 
-            entry_shares = int(pos.get("shares", sold_shares))
-            entry_cost = entry_shares * pos["entry_price"] + pos.get("entry_fee", 0.0)
-            pnl = net_credit - entry_cost
             state["realized_pnl"] += pnl
 
             hold_days = 0
@@ -2053,9 +2108,9 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     "ticker": ticker,
                     "entry_date": pos.get("entry_date"),
                     "exit_date": date.today().isoformat(),
-                    "entry_price": round(pos["entry_price"], 4),
+                    "entry_price": round(entry_price, 4),
                     "exit_price": round(exec_px, 4),
-                    "shares": int(sold_shares),
+                    "shares": int(-filled_shares if is_short else filled_shares),
                     "entry_fee": round(pos.get("entry_fee", 0.0), 4),
                     "exit_fee": round(exit_fee, 4),
                     "pnl": round(pnl, 4),
@@ -2064,14 +2119,15 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 }
             )
 
-            actions.append(f"SELL {ticker} x{int(sold_shares)} ({exit_reason})")
+            action_label = "BUY_TO_COVER" if is_short else "SELL"
+            actions.append(f"{action_label} {ticker} x{int(filled_shares)} ({exit_reason})")
             order_events.append(
                 {
                     "broker": broker,
-                    "side": "SELL",
+                    "side": order_side,
                     "ticker": ticker,
-                    "quantity": int(pos["shares"]),
-                    "filled_shares": int(sold_shares),
+                    "quantity": int(qty),
+                    "filled_shares": int(filled_shares),
                     "price": round(float(exec_px), 6),
                     "commission": round(float(exit_fee), 6),
                     "status": "filled",
@@ -2086,20 +2142,31 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             px = prices.get(tk)
             if px is None or px <= 0:
                 px = float(pos.get("last_price", pos["entry_price"]))
-            total += pos["shares"] * px
+            total += abs(_signed_shares(pos)) * px
         return total
 
     # Entry logic after exits.
-    ranked_signals = sorted(
-        (results or {}).values(),
-        key=lambda r: (float(r.get("final_score", 50.0)), float(r.get("confidence", 0.0))),
-        reverse=True,
-    )
-    for r in ranked_signals:
+    candidate_rows = []
+    for row in (results or {}).values():
+        decision = str(row.get("decision", "") or "").strip().upper()
+        side = None
+        if decision in ("BUY", "STRONG BUY"):
+            side = "long"
+        elif cfg.allow_short and decision in ("SELL", "STRONG SELL"):
+            side = "short"
+        if side is None:
+            continue
+        score = float(row.get("final_score", 50.0) or 50.0)
+        conf = float(row.get("confidence", 0.0) or 0.0)
+        # For shorts, lower scores are stronger bearish conviction.
+        rank_score = score if side == "long" else (100.0 - score)
+        candidate_rows.append((rank_score, conf, side, row))
+
+    candidate_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    for _rank_score, _conf, side, r in candidate_rows:
         ticker = str(r.get("ticker", "")).strip().upper()
         if not ticker or ticker in positions:
-            continue
-        if r.get("decision") not in ("BUY", "STRONG BUY"):
             continue
 
         target_pct = float(r.get("position_size_pct", 0.0) or 0.0)
@@ -2119,12 +2186,16 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             continue
         target_pct = min(target_pct, remaining_expo)
 
-        exec_px = px * (1 + slippage_rate)
+        is_short_entry = side == "short"
+        exec_px = px * (1 - slippage_rate if is_short_entry else 1 + slippage_rate)
         if broker == "ibkr":
             remaining_alloc = max(0.0, managed_capital - positions_market_value())
             desired_value = min(float(managed_capital) * target_pct, remaining_alloc)
         else:
-            desired_value = float(state["cash"]) * target_pct
+            if is_short_entry:
+                desired_value = max(0.0, eq_before * target_pct)
+            else:
+                desired_value = float(state["cash"]) * target_pct
         shares = int(desired_value / exec_px) if exec_px > 0 else 0
         if shares <= 0:
             continue
@@ -2132,28 +2203,29 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         gross = shares * exec_px
         entry_fee = gross * fee_rate
         total_debit = gross + entry_fee
-        if broker != "ibkr" and total_debit > state["cash"]:
+        if (not is_short_entry) and broker != "ibkr" and total_debit > state["cash"]:
             affordable = int(state["cash"] / (exec_px * (1 + fee_rate))) if exec_px > 0 else 0
             shares = max(0, affordable)
             gross = shares * exec_px
             entry_fee = gross * fee_rate
             total_debit = gross + entry_fee
-        if broker != "ibkr" and (shares <= 0 or total_debit > state["cash"]):
+        if (not is_short_entry) and broker != "ibkr" and (shares <= 0 or total_debit > state["cash"]):
             continue
 
         if broker == "ibkr":
             if ibkr is None or ibkr_trading_disabled:
                 continue
-            order_res = ibkr.place_market_order(ticker, "BUY", int(shares))
+            order_side = "SELL" if is_short_entry else "BUY"
+            order_res = ibkr.place_market_order(ticker, order_side, int(shares))
             if not order_res.get("ok"):
                 reason = str(order_res.get("reason", "unknown"))
                 warnings_list.append(
-                    f"IBKR BUY {ticker} skipped: {reason}"
+                    f"IBKR {order_side} {ticker} skipped: {reason}"
                 )
                 order_events.append(
                     {
                         "broker": "ibkr",
-                        "side": "BUY",
+                        "side": order_side,
                         "ticker": ticker,
                         "quantity": int(shares),
                         "filled_shares": 0,
@@ -2171,57 +2243,70 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 continue
 
         if broker != "ibkr":
-            state["cash"] -= total_debit
+            if is_short_entry:
+                state["cash"] += (gross - entry_fee)
+            else:
+                state["cash"] -= total_debit
+        signed_shares = -int(shares) if is_short_entry else int(shares)
         positions[ticker] = {
             "ticker": ticker,
-            "shares": int(shares),
+            "shares": int(signed_shares),
             "entry_price": float(exec_px),
             "entry_fee": float(entry_fee),
             "entry_date": date.today().isoformat(),
             "last_price": float(px),
-            "market_value": float(shares * px),
-            "unrealized_pnl": float((shares * px) - (shares * exec_px + entry_fee)),
+            "market_value": float(signed_shares * px),
+            "unrealized_pnl": float((signed_shares * (px - exec_px)) - entry_fee),
         }
-        actions.append(f"BUY {ticker} x{shares}")
+        action_label = "SHORT SELL" if is_short_entry else "BUY"
+        actions.append(f"{action_label} {ticker} x{shares}")
         order_events.append(
             {
                 "broker": broker,
-                "side": "BUY",
+                "side": "SELL" if is_short_entry else "BUY",
                 "ticker": ticker,
                 "quantity": int(shares),
                 "filled_shares": int(shares),
                 "price": round(float(exec_px), 6),
                 "commission": round(float(entry_fee), 6),
                 "status": "filled",
-                "reason": "signal_buy",
+                "reason": "signal_short" if is_short_entry else "signal_buy",
             }
         )
 
     # Mark-to-market and equity update.
     unrealized = 0.0
-    market_value = 0.0
+    market_value_net = 0.0
+    market_value_gross = 0.0
     for tk, pos in positions.items():
+        signed_qty = _signed_shares(pos)
+        if signed_qty == 0:
+            continue
         px = prices.get(tk)
         if px is None or px <= 0:
             px = float(pos.get("last_price", pos["entry_price"]))
         pos["last_price"] = round(float(px), 4)
-        mv = float(pos["shares"] * px)
-        invested = float(pos["shares"] * pos["entry_price"] + pos.get("entry_fee", 0.0))
-        upnl = mv - invested
-        pos["market_value"] = round(mv, 4)
+        entry_price = float(pos.get("entry_price", 0.0) or 0.0)
+        abs_qty = abs(signed_qty)
+        mv_signed = float(signed_qty * px)
+        mv_abs = float(abs_qty * px)
+        upnl = float((signed_qty * (px - entry_price)) - float(pos.get("entry_fee", 0.0) or 0.0))
+        pos["market_value"] = round(mv_signed, 4)
+        pos["market_value_abs"] = round(mv_abs, 4)
         pos["unrealized_pnl"] = round(upnl, 4)
         unrealized += upnl
-        market_value += mv
+        market_value_net += mv_signed
+        market_value_gross += mv_abs
 
     if broker == "ibkr":
-        state["cash"] = round(max(0.0, float(managed_capital) - market_value), 4)
+        state["cash"] = round(max(0.0, float(managed_capital) - market_value_gross), 4)
     else:
         state["cash"] = round(float(state["cash"]), 4)
     state["realized_pnl"] = round(float(state["realized_pnl"]), 4)
     if broker == "ibkr":
         state["equity"] = round(float(managed_capital), 4)
     else:
-        state["equity"] = round(state["cash"] + market_value, 4)
+        state["equity"] = round(state["cash"] + market_value_net, 4)
     state["updated_at"] = _paper_now()
     state["cycles"] = int(state.get("cycles", 0)) + 1
     state["ibkr_empty_sync_streak"] = int(empty_sync_streak if broker == "ibkr" else 0)
@@ -2237,7 +2322,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             "timestamp": state["updated_at"],
             "equity": round(state["equity"], 4),
             "cash": round(state["cash"], 4),
-            "market_value": round(float(market_value), 4),
+            "market_value": round(float(market_value_gross), 4),
+            "net_market_value": round(float(market_value_net), 4),
             "realized_pnl": round(float(state["realized_pnl"]), 4),
             "unrealized_pnl": round(float(unrealized), 4),
             "open_positions": int(len(positions)),
@@ -2248,7 +2334,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
     save_paper_state(state_path, state)
     report_paths, daily_latest = export_paper_reports(state_path, state)
-    metrics = compute_paper_metrics(state, market_value)
+    metrics = compute_paper_metrics(state, market_value_gross)
 
     daily_win_rate = daily_latest.get("daily_win_rate")
     if pd.isna(daily_win_rate):
@@ -2421,6 +2507,12 @@ def main():
                         help="Desactive la limite automatique liee aux budgets API")
     parser.add_argument("--capital", type=float, default=10000)
     parser.add_argument("--no-finbert", action="store_true")
+    parser.add_argument(
+        "--allow-short",
+        action=argparse.BooleanOptionalAction,
+        default=str(os.getenv("BUBO_ALLOW_SHORT", "0")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Autorise les positions short (SELL d'ouverture) en plus des positions longues.",
+    )
     parser.add_argument("--paper", action="store_true",
                         help="Active le paper trading avec etat persistant")
     parser.add_argument("--paper-state", type=str, default="data/paper_portfolio_state.json",
@@ -2481,6 +2573,7 @@ def main():
     cfg.watch_interval_min = max(1, int(args.watch_interval_min))
     cfg.us_market_only = bool(args.us_market_only)
     cfg.use_finbert = not args.no_finbert
+    cfg.allow_short = bool(args.allow_short)
     cfg.decision_engine = _normalize_decision_engine(args.decision_engine)
     cfg.paper_broker = _normalize_paper_broker(args.paper_broker)
     cfg.ibkr_host = str(args.ibkr_host).strip() or "127.0.0.1"

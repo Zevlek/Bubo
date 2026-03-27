@@ -605,6 +605,7 @@
         <div class="checks">
           <label><input id="us_market_only" type="checkbox" {% if defaults.us_market_only %}checked{% endif %}> Surveiller seulement la session US (09:30-16:00 ET)</label>
           <label><input id="paper_enabled" type="checkbox" {% if defaults.paper_enabled %}checked{% endif %}> Activer paper trading</label>
+          <label><input id="allow_short" type="checkbox" {% if defaults.allow_short %}checked{% endif %}> Autoriser les positions short</label>
           <label><input id="no_finbert" type="checkbox" {% if defaults.no_finbert %}checked{% endif %}> Désactiver FinBERT (plus léger)</label>
           <label><input id="no_budget_gate" type="checkbox" {% if defaults.no_budget_gate %}checked{% endif %}> Désactiver la limite d'exposition</label>
         </div>
@@ -743,6 +744,7 @@
         ibkr_capital_limit: Number(document.getElementById("ibkr_capital_limit").value || 10000),
         ibkr_existing_positions_policy: document.getElementById("ibkr_existing_positions_policy").value,
         paper_enabled: document.getElementById("paper_enabled").checked,
+        allow_short: document.getElementById("allow_short").checked,
         no_finbert: document.getElementById("no_finbert").checked,
         no_budget_gate: document.getElementById("no_budget_gate").checked
       };

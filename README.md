@@ -312,6 +312,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
 | `BUBO_GEMINI_MODEL_CHAIN` | Liste des modeles Gemini essayes (ordre de fallback) | Non | Liste separee par virgules (ex: `gemini-2.5-flash` ou `gemini-2.5-flash,gemini-2.5-pro`) | `gemini-2.5-flash` |
 | `BUBO_GEMINI_MAX_OUTPUT_TOKENS` | Limite de tokens de sortie par decision LLM | Non | Entier `256..2048` | `700` |
+| `BUBO_GEMINI_THINKING_BUDGET` | Budget de raisonnement interne Gemini (0 = sortie JSON plus stable) | Non | Entier `0..2048` | `0` |
 | `BUBO_GEMINI_PROMPT_MAX_EVENTS` | Nombre max d'evenements inclus dans le prompt | Non | Entier `0..10` | `4` |
 | `BUBO_GEMINI_PROMPT_MAX_HEADLINES` | Nombre max de headlines news dans le prompt | Non | Entier `0..10` | `3` |
 | `BUBO_GEMINI_PROMPT_MAX_POSTS` | Nombre max de posts sociaux dans le prompt | Non | Entier `0..10` | `2` |
@@ -321,6 +322,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_WATCH_INTERVAL_MIN` | Intervalle entre deux cycles en mode watch | Non | Entier `>= 1` (minutes) | `30` |
 | `BUBO_US_MARKET_ONLY` | En mode watch, n'execute les cycles que pendant la session reguliere US | Non | `0` ou `1` | `1` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
+| `BUBO_ALLOW_SHORT` | Autorise les shorts (SELL d'ouverture) | Non | `0` ou `1` | `0` |
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
 | `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |
@@ -363,6 +365,7 @@ Notes compatibilite:
 - Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur renvoie `NO_DECISION` (aucun trade).
 - Au demarrage, le log affiche les modeles Gemini utilises et `max_output_tokens`.
 - Si tu vois beaucoup de `llm_error=parse_failed`/`truncated`, commence par monter `BUBO_GEMINI_MAX_OUTPUT_TOKENS` (>= `256`, recommande `700`).
+- Si tu vois `finish_reason=MAX_TOKENS` malgre une valeur elevee, laisse `BUBO_GEMINI_THINKING_BUDGET=0` pour prioriser la sortie JSON.
 
 ## Test paper trading IBKR
 

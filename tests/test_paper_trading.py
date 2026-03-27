@@ -124,6 +124,42 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertTrue(any("stop_loss" in a for a in summary["actions"]))
 
+    def test_short_entry_and_cover(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+            self.cfg.allow_short = True
+
+            short_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "SELL",
+                    "position_size_pct": 0.20,
+                    "final_score": 20.0,
+                    "confidence": 85.0,
+                }
+            }
+            summary_short = self._run_cycle(short_signal, {"AAA": 100.0}, state_path)
+            self.assertEqual(summary_short["positions"], 1)
+            self.assertTrue(any(a.startswith("SHORT SELL AAA") for a in summary_short["actions"]))
+
+            persisted = load_paper_state(str(state_path), self.cfg)
+            self.assertIn("AAA", persisted["positions"])
+            self.assertLess(int(persisted["positions"]["AAA"]["shares"]), 0)
+
+            cover_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.0,  # cover only, no same-cycle long flip
+                    "final_score": 80.0,
+                    "confidence": 80.0,
+                }
+            }
+            summary_cover = self._run_cycle(cover_signal, {"AAA": 90.0}, state_path)
+            self.assertEqual(summary_cover["positions"], 0)
+            self.assertTrue(any("BUY_TO_COVER AAA" in a for a in summary_cover["actions"]))
+            self.assertGreater(summary_cover["realized_pnl"], 0.0)
+
     def test_invalid_state_file_is_reinitialized(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "paper_state.json"

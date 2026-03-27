@@ -22,6 +22,7 @@ class WebAppTests(unittest.TestCase):
                 "max_deep": 25,
                 "watch_interval_min": 30,
                 "capital": 15000,
+                "allow_short": True,
                 "decision_engine": "llm",
                 "paper_enabled": True,
                 "paper_state": "data/custom_state.json",
@@ -45,6 +46,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("30", cmd)
         self.assertIn("--capital", cmd)
         self.assertIn("15000.0", cmd)
+        self.assertIn("--allow-short", cmd)
+        self.assertNotIn("--no-allow-short", cmd)
         self.assertIn("--decision-engine", cmd)
         self.assertIn("llm", cmd)
         self.assertIn("--paper", cmd)
@@ -76,6 +79,7 @@ class WebAppTests(unittest.TestCase):
                 "max_deep": 5,
                 "watch_interval_min": 30,
                 "decision_engine": "rules",
+                "allow_short": False,
                 "paper_enabled": False,
                 "no_finbert": False,
                 "paper_webhook": "",
@@ -97,6 +101,7 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("--paper-webhook", cmd)
         self.assertIn("--decision-engine", cmd)
         self.assertIn("rules", cmd)
+        self.assertIn("--no-allow-short", cmd)
         self.assertIn("--watch-interval-min", cmd)
         self.assertIn("30", cmd)
         self.assertIn("--paper-broker", cmd)

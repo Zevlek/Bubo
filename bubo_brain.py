@@ -100,12 +100,14 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 GEMINI_MODELS = _parse_model_chain(os.environ.get("BUBO_GEMINI_MODEL_CHAIN", "gemini-2.5-flash"))
 MIN_SAFE_OUTPUT_TOKENS = 256
+MAX_RETRY_OUTPUT_TOKENS = 2048
 GEMINI_MAX_OUTPUT_TOKENS = _env_int(
     "BUBO_GEMINI_MAX_OUTPUT_TOKENS",
     700,
     MIN_SAFE_OUTPUT_TOKENS,
     2048,
 )
+GEMINI_THINKING_BUDGET = _env_int("BUBO_GEMINI_THINKING_BUDGET", 0, 0, 2048)
 PROMPT_MAX_EVENTS = _env_int("BUBO_GEMINI_PROMPT_MAX_EVENTS", 4, 0, 10)
 PROMPT_MAX_HEADLINES = _env_int("BUBO_GEMINI_PROMPT_MAX_HEADLINES", 3, 0, 10)
 PROMPT_MAX_POSTS = _env_int("BUBO_GEMINI_PROMPT_MAX_POSTS", 2, 0, 10)
@@ -415,10 +417,56 @@ class GeminiBrain:
                     pass
             print(
                 "  ✅ Gemini connecté "
-                f"(modèles: {', '.join(GEMINI_MODELS)} | max_output_tokens={GEMINI_MAX_OUTPUT_TOKENS})"
+                f"(modèles: {', '.join(GEMINI_MODELS)} | max_output_tokens={GEMINI_MAX_OUTPUT_TOKENS} | "
+                f"thinking_budget={GEMINI_THINKING_BUDGET})"
             )
         except ImportError:
             print("  ❌ google-genai non installé: pip install google-genai")
+
+    @staticmethod
+    def _retry_output_tokens(base_tokens: int) -> list[int]:
+        base = max(MIN_SAFE_OUTPUT_TOKENS, min(MAX_RETRY_OUTPUT_TOKENS, int(base_tokens)))
+        budgets = [base]
+        if base < 512:
+            budgets.append(512)
+        if budgets[-1] < 1024:
+            budgets.append(1024)
+        if budgets[-1] < MAX_RETRY_OUTPUT_TOKENS:
+            budgets.append(MAX_RETRY_OUTPUT_TOKENS)
+        # Deduplicate while preserving order.
+        seen = set()
+        out = []
+        for b in budgets:
+            if b in seen:
+                continue
+            out.append(b)
+            seen.add(b)
+        return out
+
+    @staticmethod
+    def _needs_token_retry(parsed: dict) -> bool:
+        status = str(parsed.get("_llm_status", "") or "")
+        if status not in {"truncated", "incomplete_payload", "parse_failed"}:
+            return False
+        err = str(parsed.get("_llm_error", "") or "").upper()
+        return "MAX_TOKENS" in err
+
+    @staticmethod
+    def _build_generate_config(types_module, output_tokens: int):
+        kwargs = {
+            "system_instruction": SYSTEM_PROMPT,
+            "temperature": 0.3,
+            "max_output_tokens": int(output_tokens),
+            "response_mime_type": "application/json",
+        }
+        # Keep budget for visible JSON output; avoids hidden reasoning eating token cap.
+        try:
+            kwargs["thinking_config"] = types_module.ThinkingConfig(
+                thinking_budget=int(GEMINI_THINKING_BUDGET)
+            )
+        except Exception:
+            pass
+        return types_module.GenerateContentConfig(**kwargs)
 
     def analyze(self, ticker_data: dict, dry_run: bool = False) -> dict:
         prompt = self._build_prompt(ticker_data)
@@ -444,46 +492,61 @@ class GeminiBrain:
         from google.genai import types
         last_error = ""
         for model in GEMINI_MODELS:
-            for attempt in range(3):
-                try:
-                    response = self.client.models.generate_content(
-                        model=model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.3,
-                            max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
-                            response_mime_type="application/json",
-                        ),
-                    )
-                    if attempt == 0 and model == GEMINI_MODELS[0]:
-                        pass  # Premier essai, pas besoin de log
-                    else:
-                        print(f"    ✅ {model} (tentative {attempt + 1})")
-                    finish_reason = self._extract_finish_reason(response)
-                    response_text = self._extract_response_text(response)
-                    return self._parse(
-                        response_text,
-                        ticker,
-                        model=model,
-                        finish_reason=finish_reason,
-                    )
-
-                except Exception as e:
-                    err_str = str(e)
-                    last_error = f"{model}: {err_str}"
-                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        if attempt < 2:
-                            wait = 10 * (attempt + 1)
-                            print(f"    ⏳ {model}: rate limit, retry dans {wait}s...")
-                            time.sleep(wait)
-                            continue
+            token_budgets = self._retry_output_tokens(GEMINI_MAX_OUTPUT_TOKENS)
+            model_failed = False
+            for token_budget in token_budgets:
+                retry_with_more_tokens = False
+                for attempt in range(3):
+                    try:
+                        response = self.client.models.generate_content(
+                            model=model,
+                            contents=prompt,
+                            config=self._build_generate_config(types, token_budget),
+                        )
+                        if attempt == 0 and token_budget == token_budgets[0] and model == GEMINI_MODELS[0]:
+                            pass  # Premier essai, pas besoin de log
                         else:
+                            print(
+                                f"    ✅ {model} (tentative {attempt + 1}, max_output_tokens={token_budget})"
+                            )
+                        finish_reason = self._extract_finish_reason(response)
+                        response_text = self._extract_response_text(response)
+                        parsed = self._parse(
+                            response_text,
+                            ticker,
+                            model=model,
+                            finish_reason=finish_reason,
+                        )
+                        if parsed.get("_llm_ok", False):
+                            return parsed
+                        last_error = f"{model}: {parsed.get('_llm_status', 'error')}: {parsed.get('_llm_error', '')}"
+                        if self._needs_token_retry(parsed) and token_budget < token_budgets[-1]:
+                            retry_with_more_tokens = True
+                            print(
+                                f"    ↗️  {model}: sortie tronquée (max_output_tokens={token_budget}), retry avec budget plus élevé"
+                            )
+                            break
+                        return parsed
+
+                    except Exception as e:
+                        err_str = str(e)
+                        last_error = f"{model}: {err_str}"
+                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            if attempt < 2:
+                                wait = 10 * (attempt + 1)
+                                print(f"    ⏳ {model}: rate limit, retry dans {wait}s...")
+                                time.sleep(wait)
+                                continue
                             print(f"    ⚠️  {model}: quota épuisé, essai modèle suivant")
-                            break  # Passer au modèle suivant
-                    else:
+                            model_failed = True
+                            break
                         print(f"    ⚠️  {model}: {e}")
+                        model_failed = True
                         break
+                if model_failed:
+                    break
+                if retry_with_more_tokens:
+                    continue
 
         print(f"    ❌ Tous les modèles ont échoué pour {ticker}")
         return self._default(
