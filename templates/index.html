@@ -771,6 +771,12 @@
       return Number.isFinite(n) ? n : fallback;
     }
 
+    function maybeNumber(value) {
+      if (value === null || value === undefined || value === "") return NaN;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
     function fmtMoney(value, currency = "USD") {
       const n = asNumber(value, NaN);
       if (!Number.isFinite(n)) return "n/a";
@@ -1007,15 +1013,34 @@
           return;
         }
 
-        const summaryUnrealized = asNumber(summary.UnrealizedPnL, NaN);
-        const summaryRealized = asNumber(summary.RealizedPnL, NaN);
+        const summaryUnrealized = maybeNumber(summary.UnrealizedPnL);
+        const summaryRealized = maybeNumber(summary.RealizedPnL);
         const positionsUnrealized = positions.reduce((acc, p) => {
-          const v = asNumber(p.unrealized_pnl, NaN);
+          const qty = asNumber(p.quantity, 0);
+          const avgCost = maybeNumber(p.avg_cost);
+          const marketPrice = maybeNumber(p.market_price);
+          const direct = maybeNumber(p.unrealized_pnl);
+          const derived = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
+            ? (marketPrice - avgCost) * qty
+            : NaN;
+          const v = Number.isFinite(direct) ? direct : derived;
           return Number.isFinite(v) ? acc + v : acc;
         }, 0);
-        const totalPnl = (Number.isFinite(summaryUnrealized) || Number.isFinite(summaryRealized))
-          ? (asNumber(summaryUnrealized, 0) + asNumber(summaryRealized, 0))
-          : positionsUnrealized;
+        const hasPositionsUnrealized = positions.some(p => {
+          const qty = asNumber(p.quantity, 0);
+          const avgCost = maybeNumber(p.avg_cost);
+          const marketPrice = maybeNumber(p.market_price);
+          const direct = maybeNumber(p.unrealized_pnl);
+          const derived = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
+            ? (marketPrice - avgCost) * qty
+            : NaN;
+          return Number.isFinite(direct) || Number.isFinite(derived);
+        });
+        const effectiveUnrealized = Number.isFinite(summaryUnrealized)
+          ? summaryUnrealized
+          : (hasPositionsUnrealized ? positionsUnrealized : 0);
+        const effectiveRealized = Number.isFinite(summaryRealized) ? summaryRealized : 0;
+        const totalPnl = effectiveUnrealized + effectiveRealized;
 
         portfolioKpisEl.innerHTML = `
           <div class="kpi"><strong>Compte:</strong> ${escapeHtml(ibkr.account || "n/a")} | <strong>Latence:</strong> ${asNumber(ibkr.latency_ms, 0)} ms</div>
@@ -1035,11 +1060,11 @@
             const key = symbol.toUpperCase();
             const paperPos = paperByTicker.get(key) || {};
             const entry = asNumber(paperPos.entry_price, NaN);
-            const avgCost = asNumber(pos.avg_cost, NaN);
+            const avgCost = maybeNumber(pos.avg_cost);
             const qty = asNumber(pos.quantity, 0);
-            const marketValue = asNumber(pos.market_value, NaN);
-            const marketPrice = asNumber(pos.market_price, NaN);
-            const unrealized = asNumber(pos.unrealized_pnl, NaN);
+            const marketValue = maybeNumber(pos.market_value);
+            const marketPrice = maybeNumber(pos.market_price);
+            const unrealized = maybeNumber(pos.unrealized_pnl);
             const displayName = symbol || "n/a";
             const valueFallback = (Number.isFinite(marketPrice) && marketPrice > 0)
               ? marketPrice * qty
@@ -1047,6 +1072,10 @@
             const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
               ? valueFallback
               : marketValue;
+            const unrealizedFallback = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
+              ? (marketPrice - avgCost) * qty
+              : NaN;
+            const displayUnrealized = Number.isFinite(unrealized) ? unrealized : unrealizedFallback;
             return `
               <tr>
                 <td>${escapeHtml(displayName)}</td>
@@ -1055,7 +1084,7 @@
                 <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
                 <td>${Number.isFinite(entry) ? entry.toFixed(2) : (Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a")}</td>
                 <td>${Number.isFinite(displayValue) ? fmtMoney(displayValue, currency) : "n/a"}</td>
-                <td class="${pnlClass(unrealized)}">${fmtSignedMoney(unrealized, currency)}</td>
+                <td class="${pnlClass(displayUnrealized)}">${fmtSignedMoney(displayUnrealized, currency)}</td>
               </tr>
             `;
           }).join("");

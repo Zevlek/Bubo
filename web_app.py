@@ -365,34 +365,150 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                 currency = str(getattr(row, "currency", "") or "")
 
         positions = []
+        contracts_to_quote: list[Any] = []
+        quoted_contract_ids: set[int] = set()
         try:
-            pos_rows = ib.positions(account=account) if account else ib.positions()
+            portfolio_rows = ib.portfolio(account=account) if account else ib.portfolio()
         except TypeError:
-            pos_rows = ib.positions()
-        for p in pos_rows or []:
-            row_account = str(getattr(p, "account", "") or "")
-            if account and row_account and row_account != account:
-                continue
-            contract = getattr(p, "contract", None)
-            symbol = str(getattr(contract, "symbol", "") or "")
-            if not symbol:
-                continue
-            qty = _safe_float(getattr(p, "position", 0.0), 0.0)
+            portfolio_rows = ib.portfolio()
+        except Exception:
+            portfolio_rows = []
+        if portfolio_rows:
+            for p in portfolio_rows or []:
+                row_account = str(getattr(p, "account", "") or "")
+                if account and row_account and row_account != account:
+                    continue
+                contract = getattr(p, "contract", None)
+                symbol = str(getattr(contract, "symbol", "") or "")
+                if not symbol:
+                    continue
+                qty = _safe_float(getattr(p, "position", 0.0), 0.0)
+                if abs(qty) < 1e-12:
+                    continue
+                con_id = _safe_int(getattr(contract, "conId", 0) if contract is not None else 0, 0)
+                market_price = _safe_float_or_none(getattr(p, "marketPrice", None))
+                if (
+                    contract is not None
+                    and con_id > 0
+                    and (market_price is None or market_price <= 0.0)
+                    and con_id not in quoted_contract_ids
+                ):
+                    quoted_contract_ids.add(con_id)
+                    contracts_to_quote.append(contract)
+                positions.append(
+                    {
+                        "account": row_account,
+                        "symbol": symbol,
+                        "exchange": str(getattr(contract, "exchange", "") or ""),
+                        "currency": str(getattr(contract, "currency", "") or ""),
+                        "quantity": qty,
+                        "avg_cost": _safe_float(getattr(p, "averageCost", 0.0), 0.0),
+                        "market_price": market_price,
+                        "market_value": _safe_float_or_none(getattr(p, "marketValue", None)),
+                        "unrealized_pnl": _safe_float_or_none(getattr(p, "unrealizedPNL", None)),
+                        "realized_pnl": _safe_float_or_none(getattr(p, "realizedPNL", None)),
+                        "_con_id": con_id,
+                    }
+                )
+        else:
+            try:
+                pos_rows = ib.positions(account=account) if account else ib.positions()
+            except TypeError:
+                pos_rows = ib.positions()
+            for p in pos_rows or []:
+                row_account = str(getattr(p, "account", "") or "")
+                if account and row_account and row_account != account:
+                    continue
+                contract = getattr(p, "contract", None)
+                symbol = str(getattr(contract, "symbol", "") or "")
+                if not symbol:
+                    continue
+                qty = _safe_float(getattr(p, "position", 0.0), 0.0)
+                if abs(qty) < 1e-12:
+                    continue
+                con_id = _safe_int(getattr(contract, "conId", 0) if contract is not None else 0, 0)
+                market_price = _safe_float_or_none(getattr(p, "marketPrice", None))
+                if (
+                    contract is not None
+                    and con_id > 0
+                    and (market_price is None or market_price <= 0.0)
+                    and con_id not in quoted_contract_ids
+                ):
+                    quoted_contract_ids.add(con_id)
+                    contracts_to_quote.append(contract)
+                positions.append(
+                    {
+                        "account": row_account,
+                        "symbol": symbol,
+                        "exchange": str(getattr(contract, "exchange", "") or ""),
+                        "currency": str(getattr(contract, "currency", "") or ""),
+                        "quantity": qty,
+                        "avg_cost": _safe_float(getattr(p, "avgCost", 0.0), 0.0),
+                        "market_price": market_price,
+                        "market_value": _safe_float_or_none(getattr(p, "marketValue", None)),
+                        "unrealized_pnl": _safe_float_or_none(getattr(p, "unrealizedPNL", None)),
+                        "realized_pnl": _safe_float_or_none(getattr(p, "realizedPNL", None)),
+                        "_con_id": con_id,
+                    }
+                )
+
+        if contracts_to_quote:
+            try:
+                quote_rows = ib.reqTickers(*contracts_to_quote) or []
+            except Exception:
+                quote_rows = []
+            quote_by_con_id: dict[int, float] = {}
+            for quote in quote_rows:
+                contract = getattr(quote, "contract", None)
+                con_id = _safe_int(getattr(contract, "conId", 0) if contract is not None else 0, 0)
+                if con_id <= 0:
+                    continue
+                price = None
+                try:
+                    market_price_fn = getattr(quote, "marketPrice", None)
+                    if callable(market_price_fn):
+                        price = _safe_float_or_none(market_price_fn())
+                except Exception:
+                    price = None
+                if price is None or price <= 0.0:
+                    for attr in ("last", "close", "midpoint"):
+                        cand = _safe_float_or_none(getattr(quote, attr, None))
+                        if cand is not None and cand > 0.0:
+                            price = cand
+                            break
+                if price is not None and price > 0.0:
+                    quote_by_con_id[con_id] = price
+
+            if quote_by_con_id:
+                for pos in positions:
+                    con_id = _safe_int(pos.get("_con_id"), 0)
+                    if con_id <= 0:
+                        continue
+                    market_price = _safe_float_or_none(pos.get("market_price"))
+                    if market_price is None or market_price <= 0.0:
+                        quote_px = quote_by_con_id.get(con_id)
+                        if quote_px is not None and quote_px > 0.0:
+                            pos["market_price"] = quote_px
+
+        for pos in positions:
+            qty = _safe_float(pos.get("quantity"), 0.0)
             if abs(qty) < 1e-12:
                 continue
-            pos = {
-                "account": row_account,
-                "symbol": symbol,
-                "exchange": str(getattr(contract, "exchange", "") or ""),
-                "currency": str(getattr(contract, "currency", "") or ""),
-                "quantity": qty,
-                "avg_cost": _safe_float(getattr(p, "avgCost", 0.0), 0.0),
-                "market_price": _safe_float_or_none(getattr(p, "marketPrice", None)),
-                "market_value": _safe_float_or_none(getattr(p, "marketValue", None)),
-                "unrealized_pnl": _safe_float_or_none(getattr(p, "unrealizedPNL", None)),
-                "realized_pnl": _safe_float_or_none(getattr(p, "realizedPNL", None)),
-            }
-            positions.append(pos)
+            avg_cost = _safe_float_or_none(pos.get("avg_cost"))
+            market_price = _safe_float_or_none(pos.get("market_price"))
+            market_value = _safe_float_or_none(pos.get("market_value"))
+            if market_value is None or abs(market_value) < 1e-9:
+                if market_price is not None and market_price > 0.0:
+                    market_value = market_price * qty
+                elif avg_cost is not None and avg_cost > 0.0:
+                    market_value = avg_cost * qty
+                pos["market_value"] = market_value
+            unrealized_pnl = _safe_float_or_none(pos.get("unrealized_pnl"))
+            if unrealized_pnl is None and market_price is not None and avg_cost is not None and market_price > 0.0:
+                pos["unrealized_pnl"] = (market_price - avg_cost) * qty
+
+        for pos in positions:
+            pos.pop("_con_id", None)
         positions.sort(key=lambda r: abs(_safe_float(r.get("market_value"), 0.0)), reverse=True)
 
         executions = []
