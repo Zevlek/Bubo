@@ -136,6 +136,9 @@ class EngineConfig:
     min_confidence_for_entry: float = 30.0
     max_open_positions: int = 3
     max_total_exposure_pct: float = 0.60
+    rotation_enabled: bool = True
+    rotation_min_edge: float = 12.0
+    rotation_max_per_cycle: int = 1
 
     # Backtest
     backtest_period_years: int = 2
@@ -2019,6 +2022,144 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     def _is_short(pos_row: dict[str, Any]) -> bool:
         return _signed_shares(pos_row) < 0
 
+    def _candidate_strength(side: str, row: dict[str, Any]) -> float:
+        score = float(row.get("final_score", 50.0) or 50.0)
+        conf = float(row.get("confidence", 0.0) or 0.0)
+        base = score if side == "long" else (100.0 - score)
+        return float(base + ((conf - 50.0) * 0.1))
+
+    def _position_signal_strength(ticker: str, pos_row: dict[str, Any]) -> float:
+        decision_row = (results.get(ticker, {}) or {}) if isinstance(results, dict) else {}
+        decision = str(decision_row.get("decision", "HOLD") or "HOLD").strip().upper()
+        score = float(decision_row.get("final_score", 50.0) or 50.0)
+        conf = float(decision_row.get("confidence", 0.0) or 0.0)
+
+        if _is_short(pos_row):
+            base = (100.0 - score)
+            if decision in ("BUY", "STRONG BUY"):
+                base -= 40.0
+            elif decision not in ("SELL", "STRONG SELL"):
+                base -= 15.0
+        else:
+            base = score
+            if decision in ("SELL", "STRONG SELL"):
+                base -= 40.0
+            elif decision not in ("BUY", "STRONG BUY"):
+                base -= 15.0
+
+        mv_abs = float(pos_row.get("market_value_abs", 0.0) or 0.0)
+        if mv_abs <= 0:
+            mv_abs = abs(_signed_shares(pos_row)) * float(pos_row.get("entry_price", 0.0) or 0.0)
+        upnl = float(pos_row.get("unrealized_pnl", 0.0) or 0.0)
+        if mv_abs > 0 and upnl < 0:
+            loss_penalty = min(20.0, (abs(upnl) / mv_abs) * 100.0)
+            base -= loss_penalty
+
+        base += max(-5.0, min(5.0, (conf - 50.0) * 0.1))
+        return float(base)
+
+    def _close_position(ticker: str, exit_reason: str) -> bool:
+        pos_row = positions.get(ticker)
+        if not isinstance(pos_row, dict):
+            return False
+
+        signed_qty = _signed_shares(pos_row)
+        if signed_qty == 0:
+            positions.pop(ticker, None)
+            return False
+
+        is_short = _is_short(pos_row)
+        qty = abs(signed_qty)
+        px = prices.get(ticker)
+        if px is None or px <= 0:
+            return False
+
+        order_side = "BUY" if is_short else "SELL"
+        exec_px = px * (1 + slippage_rate if is_short else 1 - slippage_rate)
+        exit_fee = 0.0
+        filled_shares = int(qty)
+
+        if broker == "ibkr":
+            if ibkr is None or ibkr_trading_disabled:
+                return False
+            order_res = ibkr.place_market_order(ticker, order_side, int(qty))
+            if not order_res.get("ok"):
+                reason = str(order_res.get("reason", "unknown"))
+                warnings_list.append(f"IBKR {order_side} {ticker} skipped: {reason}")
+                order_events.append(
+                    {
+                        "broker": "ibkr",
+                        "side": order_side,
+                        "ticker": ticker,
+                        "quantity": int(qty),
+                        "filled_shares": 0,
+                        "status": "skipped",
+                        "reason": reason,
+                    }
+                )
+                return False
+            filled_shares = int(order_res.get("filled", qty))
+            exec_px = float(order_res.get("avg_fill_price", exec_px) or exec_px)
+            exit_fee = float(order_res.get("commission", 0.0) or 0.0)
+        else:
+            gross_for_fee = qty * exec_px
+            exit_fee = gross_for_fee * fee_rate
+
+        entry_price = float(pos_row.get("entry_price", 0.0) or 0.0)
+        if is_short:
+            buyback_cost = (filled_shares * exec_px) + exit_fee
+            state["cash"] -= buyback_cost
+            entry_credit = (qty * entry_price) - float(pos_row.get("entry_fee", 0.0) or 0.0)
+            pnl = entry_credit - buyback_cost
+        else:
+            gross = filled_shares * exec_px
+            net_credit = gross - exit_fee
+            state["cash"] += net_credit
+            entry_cost = (qty * entry_price) + float(pos_row.get("entry_fee", 0.0) or 0.0)
+            pnl = net_credit - entry_cost
+
+        state["realized_pnl"] += pnl
+
+        hold_days = 0
+        try:
+            hold_days = (datetime.now().date() - date.fromisoformat(pos_row["entry_date"])).days
+        except Exception:
+            hold_days = 0
+
+        state["trades"].append(
+            {
+                "ticker": ticker,
+                "entry_date": pos_row.get("entry_date"),
+                "exit_date": date.today().isoformat(),
+                "entry_price": round(entry_price, 4),
+                "exit_price": round(exec_px, 4),
+                "shares": int(-filled_shares if is_short else filled_shares),
+                "entry_fee": round(pos_row.get("entry_fee", 0.0), 4),
+                "exit_fee": round(exit_fee, 4),
+                "pnl": round(pnl, 4),
+                "exit_reason": exit_reason,
+                "hold_days": int(hold_days),
+            }
+        )
+
+        action_label = "BUY_TO_COVER" if is_short else "SELL"
+        actions.append(f"{action_label} {ticker} x{int(filled_shares)} ({exit_reason})")
+        order_events.append(
+            {
+                "broker": broker,
+                "side": order_side,
+                "ticker": ticker,
+                "quantity": int(qty),
+                "filled_shares": int(filled_shares),
+                "price": round(float(exec_px), 6),
+                "commission": round(float(exit_fee), 6),
+                "status": "filled",
+                "reason": exit_reason,
+            }
+        )
+        positions.pop(ticker, None)
+        return True
+
     # Exit logic first.
     for ticker in list(positions.keys()):
         pos = positions[ticker]
@@ -2027,7 +2168,6 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             del positions[ticker]
             continue
         is_short = _is_short(pos)
-        qty = abs(signed_qty)
         px = prices.get(ticker)
         if px is None or px <= 0:
             continue
@@ -2051,90 +2191,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 exit_reason = "take_profit"
 
         if exit_reason:
-            order_side = "BUY" if is_short else "SELL"
-            exec_px = px * (1 + slippage_rate if is_short else 1 - slippage_rate)
-            exit_fee = 0.0
-            filled_shares = int(qty)
-            if broker == "ibkr":
-                if ibkr is None or ibkr_trading_disabled:
-                    continue
-                order_res = ibkr.place_market_order(ticker, order_side, int(qty))
-                if not order_res.get("ok"):
-                    reason = str(order_res.get("reason", "unknown"))
-                    warnings_list.append(
-                        f"IBKR {order_side} {ticker} skipped: {reason}"
-                    )
-                    order_events.append(
-                        {
-                            "broker": "ibkr",
-                            "side": order_side,
-                            "ticker": ticker,
-                            "quantity": int(qty),
-                            "filled_shares": 0,
-                            "status": "skipped",
-                            "reason": reason,
-                        }
-                    )
-                    continue
-                filled_shares = int(order_res.get("filled", qty))
-                exec_px = float(order_res.get("avg_fill_price", exec_px) or exec_px)
-                exit_fee = float(order_res.get("commission", 0.0) or 0.0)
-            else:
-                gross_for_fee = qty * exec_px
-                exit_fee = gross_for_fee * fee_rate
-
-            if is_short:
-                buyback_cost = (filled_shares * exec_px) + exit_fee
-                state["cash"] -= buyback_cost
-                entry_credit = (qty * entry_price) - float(pos.get("entry_fee", 0.0) or 0.0)
-                pnl = entry_credit - buyback_cost
-            else:
-                gross = filled_shares * exec_px
-                net_credit = gross - exit_fee
-                state["cash"] += net_credit
-                entry_cost = (qty * entry_price) + float(pos.get("entry_fee", 0.0) or 0.0)
-                pnl = net_credit - entry_cost
-
-            state["realized_pnl"] += pnl
-
-            hold_days = 0
-            try:
-                hold_days = (datetime.now().date() - date.fromisoformat(pos["entry_date"])).days
-            except Exception:
-                hold_days = 0
-
-            state["trades"].append(
-                {
-                    "ticker": ticker,
-                    "entry_date": pos.get("entry_date"),
-                    "exit_date": date.today().isoformat(),
-                    "entry_price": round(entry_price, 4),
-                    "exit_price": round(exec_px, 4),
-                    "shares": int(-filled_shares if is_short else filled_shares),
-                    "entry_fee": round(pos.get("entry_fee", 0.0), 4),
-                    "exit_fee": round(exit_fee, 4),
-                    "pnl": round(pnl, 4),
-                    "exit_reason": exit_reason,
-                    "hold_days": int(hold_days),
-                }
-            )
-
-            action_label = "BUY_TO_COVER" if is_short else "SELL"
-            actions.append(f"{action_label} {ticker} x{int(filled_shares)} ({exit_reason})")
-            order_events.append(
-                {
-                    "broker": broker,
-                    "side": order_side,
-                    "ticker": ticker,
-                    "quantity": int(qty),
-                    "filled_shares": int(filled_shares),
-                    "price": round(float(exec_px), 6),
-                    "commission": round(float(exit_fee), 6),
-                    "status": "filled",
-                    "reason": exit_reason,
-                }
-            )
-            del positions[ticker]
+            _close_position(ticker, exit_reason)
 
     def positions_market_value() -> float:
         total = 0.0
@@ -2164,6 +2221,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
     candidate_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
+    rotation_count = 0
     for _rank_score, _conf, side, r in candidate_rows:
         ticker = str(r.get("ticker", "")).strip().upper()
         if not ticker or ticker in positions:
@@ -2173,7 +2231,35 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         if target_pct <= 0:
             continue
         if len(positions) >= int(cfg.max_open_positions):
-            continue
+            if (
+                (not cfg.rotation_enabled)
+                or rotation_count >= int(cfg.rotation_max_per_cycle)
+            ):
+                continue
+            candidate_strength = _candidate_strength(side, r)
+            weakest_ticker = None
+            weakest_strength = float("inf")
+            for held_ticker, held_pos in positions.items():
+                strength = _position_signal_strength(held_ticker, held_pos)
+                if strength < weakest_strength:
+                    weakest_strength = strength
+                    weakest_ticker = held_ticker
+
+            if weakest_ticker is None:
+                continue
+
+            edge = float(candidate_strength - weakest_strength)
+            if edge < float(cfg.rotation_min_edge):
+                continue
+
+            if not _close_position(weakest_ticker, "rotation"):
+                continue
+            rotation_count += 1
+            warnings_list.append(
+                f"Rotation: {weakest_ticker} -> {ticker} (edge={edge:.1f})"
+            )
+            if len(positions) >= int(cfg.max_open_positions):
+                continue
 
         px = prices.get(ticker)
         if px is None or px <= 0:
@@ -2298,14 +2384,14 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         market_value_net += mv_signed
         market_value_gross += mv_abs
 
-    if broker == "ibkr":
-        state["cash"] = round(max(0.0, float(managed_capital) - market_value_gross), 4)
-    else:
-        state["cash"] = round(float(state["cash"]), 4)
     state["realized_pnl"] = round(float(state["realized_pnl"]), 4)
     if broker == "ibkr":
-        state["equity"] = round(float(managed_capital), 4)
+        # Mark-to-market managed equity so daily stats/PnL are not flat.
+        mtm_equity = float(managed_capital) + float(state["realized_pnl"]) + float(unrealized)
+        state["equity"] = round(mtm_equity, 4)
+        state["cash"] = round(mtm_equity - market_value_net, 4)
     else:
+        state["cash"] = round(float(state["cash"]), 4)
         state["equity"] = round(state["cash"] + market_value_net, 4)
     state["updated_at"] = _paper_now()
     state["cycles"] = int(state.get("cycles", 0)) + 1
@@ -2549,6 +2635,24 @@ def main():
         default=os.getenv("BUBO_IBKR_EXISTING_POSITIONS_POLICY", "include"),
         help="Traitement des positions deja ouvertes sur IBKR: include|ignore",
     )
+    parser.add_argument(
+        "--rotation-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=str(os.getenv("BUBO_ROTATION_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Autorise la rotation: fermer une position faible pour en ouvrir une meilleure quand le portefeuille est plein.",
+    )
+    parser.add_argument(
+        "--rotation-min-edge",
+        type=float,
+        default=float(os.getenv("BUBO_ROTATION_MIN_EDGE", "12")),
+        help="Ecart minimal de force signal (en points) pour declencher une rotation.",
+    )
+    parser.add_argument(
+        "--rotation-max-per-cycle",
+        type=int,
+        default=int(os.getenv("BUBO_ROTATION_MAX_PER_CYCLE", "1")),
+        help="Nombre maximal de rotations autorisees par cycle.",
+    )
     args = parser.parse_args()
     paper_state_path = args.paper_state
 
@@ -2586,6 +2690,9 @@ def main():
     cfg.ibkr_existing_positions_policy = _normalize_ibkr_existing_positions_policy(
         args.ibkr_existing_positions_policy
     )
+    cfg.rotation_enabled = bool(args.rotation_enabled)
+    cfg.rotation_min_edge = max(0.0, float(args.rotation_min_edge))
+    cfg.rotation_max_per_cycle = max(0, int(args.rotation_max_per_cycle))
 
     if args.tickers:
         cfg.tickers = args.tickers

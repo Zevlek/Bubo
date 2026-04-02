@@ -44,6 +44,7 @@ http://IP_DU_NAS:7654
 - Le diagnostic API/IBKR est manuel et repliable (bouton `Verifier les API` puis `Masquer les API`).
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
 - Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.
+- Un tableau `Sante LLM` affiche les erreurs par jour (volume, taux d'erreur, top erreur, modele dominant).
 - Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
 - Le mode watch US-only tient compte des jours feries US standards (NYSE/Nasdaq).
 
@@ -132,6 +133,9 @@ services:
       BUBO_IBKR_CURRENCY: ${BUBO_IBKR_CURRENCY:-USD}
       BUBO_IBKR_CAPITAL_LIMIT: ${BUBO_IBKR_CAPITAL_LIMIT:-10000}
       BUBO_IBKR_EXISTING_POSITIONS_POLICY: ${BUBO_IBKR_EXISTING_POSITIONS_POLICY:-include}
+      BUBO_ROTATION_ENABLED: ${BUBO_ROTATION_ENABLED:-1}
+      BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-12}
+      BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-1}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
@@ -223,6 +227,9 @@ services:
       BUBO_IBKR_CURRENCY: ${BUBO_IBKR_CURRENCY:-USD}
       BUBO_IBKR_CAPITAL_LIMIT: ${BUBO_IBKR_CAPITAL_LIMIT:-10000}
       BUBO_IBKR_EXISTING_POSITIONS_POLICY: ${BUBO_IBKR_EXISTING_POSITIONS_POLICY:-include}
+      BUBO_ROTATION_ENABLED: ${BUBO_ROTATION_ENABLED:-1}
+      BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-12}
+      BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-1}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
@@ -336,6 +343,9 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_IBKR_CURRENCY` | Devise contrat actions | Non (utile si broker=`ibkr`) | Ex: `USD`, `EUR` | `USD` |
 | `BUBO_IBKR_CAPITAL_LIMIT` | Capital max que BUBO est autorise a gerer sur IBKR | Non | Nombre `> 0` (ex: `10000`) | `10000` |
 | `BUBO_IBKR_EXISTING_POSITIONS_POLICY` | Gestion des positions IBKR deja ouvertes | Non | `include` ou `ignore` | `include` |
+| `BUBO_ROTATION_ENABLED` | Autorise la rotation (fermer une position faible pour ouvrir une plus forte si portefeuille plein) | Non | `0` ou `1` | `1` |
+| `BUBO_ROTATION_MIN_EDGE` | Ecart minimal de force signal pour declencher une rotation | Non | Nombre `>= 0` (ex: `12`) | `12` |
+| `BUBO_ROTATION_MAX_PER_CYCLE` | Nombre maximum de rotations par cycle | Non | Entier `>= 0` | `1` |
 | `IBG_TWS_USERID` | Login IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Identifiant IBKR | vide |
 | `IBG_TWS_PASSWORD` | Mot de passe IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Mot de passe IBKR | vide |
 | `IBG_TRADING_MODE` | Mode IB Gateway | Non | `paper`, `live`, `both` | `paper` |

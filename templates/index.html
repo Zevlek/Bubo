@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>🦉 Bubo</title>
+  <title>&#129417; Bubo</title>
   <style>
     :root {
       --bg: #f4f6f8;
@@ -475,7 +475,7 @@
   <div class="wrap">
     <section class="hero">
       <div class="hero-top">
-        <h1>🦉 Bubo</h1>
+        <h1>&#129417; Bubo</h1>
         {% if auth_enabled %}
         <div class="hero-auth">
           <span>Connecté: {{ auth_user }}</span>
@@ -676,6 +676,34 @@
             </table>
           </div>
         </div>
+        <div class="subcard">
+          <div class="toolbar" style="margin-bottom: 6px;">
+            <h3 style="margin:0;">Sante LLM (erreurs par jour)</h3>
+            <div class="toolbar-right">
+              <small id="llm-health-meta">Chargement...</small>
+              <button class="btn-soft" id="btn-llm-health" type="button" style="padding:6px 10px;">Actualiser</button>
+            </div>
+          </div>
+          <div class="table-wrap" style="margin-top:8px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Appels</th>
+                  <th>OK</th>
+                  <th>Erreurs</th>
+                  <th>No decision</th>
+                  <th>Taux erreur</th>
+                  <th>Erreur principale</th>
+                  <th>Modele</th>
+                </tr>
+              </thead>
+              <tbody id="llm-health-body">
+                <tr><td colspan="8">Chargement...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -720,6 +748,8 @@
     const portfolioKpisEl = document.getElementById("portfolio-kpis");
     const portfolioPosBodyEl = document.getElementById("portfolio-pos-body");
     const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
+    const llmHealthMetaEl = document.getElementById("llm-health-meta");
+    const llmHealthBodyEl = document.getElementById("llm-health-body");
     let lastPortfolioRefreshEpoch = 0;
     const PORTFOLIO_AUTO_REFRESH_MS = 60000;
 
@@ -807,6 +837,16 @@
 
     function pnlClass(value) {
       return asNumber(value, 0) >= 0 ? "pnl-pos" : "pnl-neg";
+    }
+
+    function formatTopError(row) {
+      const errors = Array.isArray(row.top_errors) ? row.top_errors : [];
+      if (!errors.length) return "-";
+      const top = errors[0] || {};
+      const label = String(top.label || "");
+      const count = asNumber(top.count, 0);
+      if (!label) return "-";
+      return `${label} (${count})`;
     }
 
     function connectivityBadgeLabel(state) {
@@ -1114,11 +1154,47 @@
       }
     }
 
+    async function refreshLlmHealth(force = false) {
+      try {
+        const suffix = force ? "&force=1" : "";
+        const res = await fetch(`/api/llm-health?days=14&limit=25000${suffix}`);
+        const data = await res.json();
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        const totals = data.totals || {};
+
+        if (!rows.length) {
+          llmHealthBodyEl.innerHTML = "<tr><td colspan='8'>Aucune donnee LLM disponible.</td></tr>";
+          llmHealthMetaEl.textContent = "Aucun log";
+          return;
+        }
+
+        llmHealthBodyEl.innerHTML = rows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.day || "")}</td>
+            <td>${asNumber(r.total, 0)}</td>
+            <td>${asNumber(r.ok, 0)}</td>
+            <td class="${pnlClass(-asNumber(r.error, 0))}">${asNumber(r.error, 0)}</td>
+            <td>${asNumber(r.no_decision, 0)}</td>
+            <td>${asNumber(r.error_rate_pct, 0).toFixed(2)}%</td>
+            <td>${escapeHtml(formatTopError(r))}</td>
+            <td>${escapeHtml(r.top_model || "n/a")}</td>
+          </tr>
+        `).join("");
+
+        llmHealthMetaEl.textContent =
+          `Total: ${asNumber(totals.total, 0)} | Erreurs: ${asNumber(totals.error, 0)} (${asNumber(totals.error_rate_pct, 0).toFixed(2)}%) | Maj: ${escapeHtml(data.generated_at || "")}`;
+      } catch (err) {
+        llmHealthBodyEl.innerHTML = `<tr><td colspan='8'>Erreur: ${escapeHtml(err)}</td></tr>`;
+        llmHealthMetaEl.textContent = "Erreur";
+      }
+    }
+
     async function refreshAll() {
       const tasks = [refreshStatus(), refreshLogs(), refreshFiles()];
       const now = Date.now();
       if (now - lastPortfolioRefreshEpoch >= PORTFOLIO_AUTO_REFRESH_MS) {
         tasks.push(refreshPortfolio(false));
+        tasks.push(refreshLlmHealth(false));
         lastPortfolioRefreshEpoch = now;
       }
       await Promise.all(tasks);
@@ -1140,6 +1216,7 @@
       await refreshConnectivity(true);
     });
     document.getElementById("btn-portfolio").addEventListener("click", () => refreshPortfolio(true));
+    document.getElementById("btn-llm-health").addEventListener("click", () => refreshLlmHealth(true));
     document.getElementById("btn-settings-toggle").addEventListener("click", () => {
       settingsPanelEl.classList.toggle("hidden");
     });
@@ -1160,3 +1237,4 @@
   </script>
 </body>
 </html>
+

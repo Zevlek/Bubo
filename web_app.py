@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,8 @@ from market_hours import get_us_market_clock
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 CHARTS_DIR = BASE_DIR / "charts"
+LOGS_DIR = DATA_DIR / "logs"
+LLM_CALLS_LOG_PATH = LOGS_DIR / "llm_calls.jsonl"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CHARTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -190,6 +192,30 @@ def _read_csv_rows(path: Path, limit: int = 200) -> list[dict[str, Any]]:
         return []
     if limit > 0:
         rows = rows[-limit:]
+    return rows
+
+
+def _read_jsonl_rows(path: Path, limit: int = 5000) -> list[dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return []
+    if limit > 0 and len(lines) > limit:
+        lines = lines[-limit:]
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, dict):
+            rows.append(item)
     return rows
 
 
@@ -659,6 +685,140 @@ def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool 
             "ibkr_capital_limit": cfg.get("ibkr_capital_limit"),
             "ibkr_existing_positions_policy": cfg.get("ibkr_existing_positions_policy"),
         },
+    }
+
+
+def _extract_log_day(timestamp_value: Any) -> str:
+    raw = str(timestamp_value or "").strip()
+    if not raw:
+        return datetime.now().strftime("%Y-%m-%d")
+    if len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-":
+        return raw[:10]
+    try:
+        cleaned = raw.replace("Z", "+00:00")
+        return datetime.fromisoformat(cleaned).date().isoformat()
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d")
+
+
+def _normalize_llm_error(err: Any) -> str:
+    text = str(err or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered.startswith("parse_failed"):
+        return "parse_failed"
+    if "json invalide" in lowered or "json tronque" in lowered or "json truncated" in lowered:
+        return "json_invalid_or_truncated"
+    if "timeout" in lowered:
+        return "timeout"
+    if "rate limit" in lowered or "quota" in lowered or "429" in lowered:
+        return "rate_limited"
+    if "503" in lowered:
+        return "api_503"
+    if "502" in lowered:
+        return "api_502"
+    if "500" in lowered:
+        return "api_500"
+    return text[:72]
+
+
+def _is_api_error_message(err: Any) -> bool:
+    lowered = str(err or "").strip().lower()
+    if not lowered:
+        return False
+    markers = ("503", "502", "500", "429", "api", "quota", "rate limit", "service unavailable", "timeout")
+    return any(marker in lowered for marker in markers)
+
+
+def get_llm_health_report(days: int = 14, limit: int = 20000) -> dict[str, Any]:
+    rows = _read_jsonl_rows(LLM_CALLS_LOG_PATH, limit=max(1000, int(limit)))
+    by_day: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        day = _extract_log_day(row.get("timestamp"))
+        bucket = by_day.setdefault(
+            day,
+            {
+                "day": day,
+                "total": 0,
+                "ok": 0,
+                "error": 0,
+                "api_error": 0,
+                "no_decision": 0,
+                "models": Counter(),
+                "errors": Counter(),
+            },
+        )
+        bucket["total"] += 1
+
+        decision = str(row.get("decision", "") or "").strip().upper()
+        if decision in {"NO_DECISION", ""}:
+            bucket["no_decision"] += 1
+
+        status = str(row.get("llm_status", "") or "").strip().lower()
+        model = str(row.get("llm_model", "") or "").strip()
+        if model:
+            bucket["models"][model] += 1
+
+        if status in {"ok", "success"}:
+            bucket["ok"] += 1
+            continue
+
+        bucket["error"] += 1
+        err_key = _normalize_llm_error(row.get("llm_error"))
+        if err_key:
+            bucket["errors"][err_key] += 1
+        if status in {"api_error", "http_error"} or _is_api_error_message(row.get("llm_error")):
+            bucket["api_error"] += 1
+
+    ordered_days = sorted(by_day.keys(), reverse=True)[: max(1, int(days))]
+    day_rows: list[dict[str, Any]] = []
+    totals = {"total": 0, "ok": 0, "error": 0, "api_error": 0, "no_decision": 0}
+    for day in ordered_days:
+        bucket = by_day[day]
+        total = int(bucket.get("total", 0) or 0)
+        error = int(bucket.get("error", 0) or 0)
+        no_decision = int(bucket.get("no_decision", 0) or 0)
+        top_errors = [
+            {"label": key, "count": int(count)}
+            for key, count in bucket.get("errors", Counter()).most_common(3)
+        ]
+        top_model = ""
+        models_counter = bucket.get("models", Counter())
+        if hasattr(models_counter, "most_common"):
+            pairs = models_counter.most_common(1)
+            if pairs:
+                top_model = str(pairs[0][0])
+        day_row = {
+            "day": day,
+            "total": total,
+            "ok": int(bucket.get("ok", 0) or 0),
+            "error": error,
+            "api_error": int(bucket.get("api_error", 0) or 0),
+            "no_decision": no_decision,
+            "error_rate_pct": round((error / total) * 100.0, 2) if total > 0 else 0.0,
+            "no_decision_rate_pct": round((no_decision / total) * 100.0, 2) if total > 0 else 0.0,
+            "top_errors": top_errors,
+            "top_model": top_model,
+        }
+        day_rows.append(day_row)
+        for key in totals.keys():
+            totals[key] += int(day_row.get(key, 0) or 0)
+
+    totals["error_rate_pct"] = round((totals["error"] / totals["total"]) * 100.0, 2) if totals["total"] > 0 else 0.0
+    totals["no_decision_rate_pct"] = (
+        round((totals["no_decision"] / totals["total"]) * 100.0, 2) if totals["total"] > 0 else 0.0
+    )
+
+    return {
+        "generated_at": _now_text(),
+        "available": bool(rows),
+        "path": str(LLM_CALLS_LOG_PATH),
+        "days_requested": max(1, int(days)),
+        "rows_loaded": len(rows),
+        "rows": day_rows,
+        "totals": totals,
     }
 
 
@@ -1466,6 +1626,14 @@ def api_portfolio():
     payload = _parse_payload() if request.method == "POST" else {}
     force = _coerce_bool(request.args.get("force"), False) or _coerce_bool(payload.get("force"), False)
     report = get_portfolio_snapshot(payload, force=force)
+    return jsonify(report)
+
+
+@app.get("/api/llm-health")
+def api_llm_health():
+    days = _coerce_int(request.args.get("days", 14), 14, minimum=1)
+    limit = _coerce_int(request.args.get("limit", 20000), 20000, minimum=1000)
+    report = get_llm_health_report(days=days, limit=limit)
     return jsonify(report)
 
 
