@@ -1250,6 +1250,51 @@ def load_paper_state(state_path: str, cfg: EngineConfig) -> dict:
     return base
 
 
+def _paper_state_open_tickers(state_path: str, cfg: EngineConfig) -> list[str]:
+    """
+    Return tickers currently open in persisted paper state.
+    Used as a safety include so open positions are always re-analyzed.
+    """
+    try:
+        state = load_paper_state(state_path, cfg)
+    except Exception:
+        return []
+
+    raw_positions = state.get("positions", {})
+    if not isinstance(raw_positions, dict):
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for ticker, pos in raw_positions.items():
+        if not isinstance(pos, dict):
+            continue
+        tk = str(ticker or "").strip().upper()
+        if not tk or tk in seen:
+            continue
+        try:
+            shares = int(pos.get("shares", 0) or 0)
+        except Exception:
+            shares = 0
+        if shares == 0:
+            continue
+        seen.add(tk)
+        out.append(tk)
+    return out
+
+
+def _merge_unique_tickers(primary: list[str], secondary: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for raw in list(primary or []) + list(secondary or []):
+        tk = str(raw or "").strip().upper()
+        if not tk or tk in seen:
+            continue
+        seen.add(tk)
+        merged.append(tk)
+    return merged
+
+
 def save_paper_state(state_path: str, state: dict):
     p = Path(state_path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -2728,11 +2773,23 @@ def main():
               f"| Allowed={meta.get('allowed', len(selected))} "
               f"| BudgetCap={meta.get('budget_cap', 'n/a')}")
 
-        if selected:
-            cfg.tickers = selected
+        selected_effective = list(selected)
+        forced_held = []
+        if args.paper:
+            held_open = _paper_state_open_tickers(paper_state_path, cfg)
+            forced_held = [tk for tk in held_open if tk not in set(selected_effective)]
+            selected_effective = _merge_unique_tickers(selected_effective, held_open)
+
+        if selected_effective:
+            cfg.tickers = selected_effective
             print(f"   Deep analysis sur: {', '.join(cfg.tickers)}")
+            if forced_held:
+                preview = ", ".join(forced_held[:8])
+                if len(forced_held) > 8:
+                    preview += ", ..."
+                print(f"   Safety include positions ouvertes: +{len(forced_held)} ({preview})")
         else:
-            print("âš ï¸  Aucune action retenue")
+            print("  Aucune action retenue")
             if args.screen_only:
                 return
             sys.exit(0)
@@ -2791,14 +2848,22 @@ def main():
                     if not shortlist_df.empty:
                         shortlist_df.to_csv("data/universe_shortlist_latest.csv", index=False)
 
-                    if selected:
-                        engine.set_tickers(selected)
+                    selected_effective = list(selected)
+                    forced_held = []
+                    if args.paper:
+                        held_open = _paper_state_open_tickers(paper_state_path, cfg)
+                        forced_held = [tk for tk in held_open if tk not in set(selected_effective)]
+                        selected_effective = _merge_unique_tickers(selected_effective, held_open)
+
+                    if selected_effective:
+                        engine.set_tickers(selected_effective)
                     else:
                         engine.set_tickers([])
 
                     dynamic_info = (
                         f"Universe={len(universe)} | Deep={len(engine.cfg.tickers)} "
-                        f"| BudgetCap={meta.get('budget_cap', 'n/a')}"
+                        f"| BudgetCap={meta.get('budget_cap', 'n/a')} "
+                        f"| HeldIncluded={len(forced_held)}"
                     )
 
                 os.system("cls" if os.name == "nt" else "clear")

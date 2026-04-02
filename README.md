@@ -47,6 +47,7 @@ http://IP_DU_NAS:7654
 - Un tableau `Sante LLM` affiche les erreurs par jour (volume, taux d'erreur, top erreur, modele dominant).
 - Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
 - Le mode watch US-only tient compte des jours feries US standards (NYSE/Nasdaq).
+- En mode univers dynamique, les positions deja ouvertes sont automatiquement reinjectees dans la liste d'analyse detaillee (safety include), meme hors top preselection.
 
 ## Observabilite (logs JSONL)
 
