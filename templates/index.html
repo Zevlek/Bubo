@@ -24,6 +24,7 @@
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
       color: var(--ink);
+      overflow-x: hidden;
       background:
         radial-gradient(1200px 500px at 10% -20%, #cfe5f6 0%, transparent 60%),
         radial-gradient(900px 500px at 100% 0%, #fde6bd 0%, transparent 55%),
@@ -92,12 +93,17 @@
       margin-top: 16px;
     }
 
+    .grid > * {
+      min-width: 0;
+    }
+
     .card {
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 14px;
       padding: 14px;
       box-shadow: 0 4px 14px rgba(16, 33, 47, 0.08);
+      min-width: 0;
     }
 
     .card h2 {
@@ -293,6 +299,26 @@
       background: #f9fcff;
     }
 
+    .settings-preset {
+      margin: 2px 0 10px;
+      padding: 8px;
+      border: 1px dashed #c7d7e2;
+      border-radius: 10px;
+      background: #f3f9ff;
+    }
+
+    .settings-preset .hint {
+      margin-top: 6px;
+      font-size: 0.76rem;
+    }
+
+    .preset-btn {
+      margin-top: 8px;
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+    }
+
     .toolbar {
       display: flex;
       justify-content: space-between;
@@ -348,10 +374,14 @@
       border: 1px solid var(--line);
       border-radius: 10px;
       -webkit-overflow-scrolling: touch;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
     }
 
     table {
-      width: 100%;
+      width: max-content;
+      min-width: 100%;
       border-collapse: collapse;
       font-size: 0.86rem;
       min-width: 540px;
@@ -361,6 +391,9 @@
       text-align: left;
       padding: 8px 10px;
       border-bottom: 1px solid #e3e9ee;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     th {
@@ -417,6 +450,11 @@
       display: grid;
       grid-template-columns: 1fr;
       gap: 14px;
+      min-width: 0;
+    }
+
+    .portfolio-grid > * {
+      min-width: 0;
     }
 
     .subcard {
@@ -424,6 +462,7 @@
       border-radius: 10px;
       padding: 10px;
       background: #fcfeff;
+      min-width: 0;
     }
 
     .subcard h3 {
@@ -529,6 +568,9 @@
       overflow: auto;
       border-top: 1px solid #e3e9ee;
       -webkit-overflow-scrolling: touch;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
     }
 
     .tx-ai-box {
@@ -613,7 +655,7 @@
       }
 
       .tx-table-scroll {
-        max-height: 58vh;
+        max-height: 56vh;
       }
 
       .kpi-line {
@@ -621,7 +663,17 @@
       }
 
       table.mobile-stack-table {
-        min-width: 720px;
+        min-width: 860px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        overflow-y: auto;
+      }
+
+      .tx-table-scroll {
+        overflow-x: auto;
+        overflow-y: auto;
       }
     }
   </style>
@@ -678,6 +730,16 @@
         </div>
 
         <div class="settings-panel hidden" id="settings-panel">
+        <div class="settings-preset">
+          <label class="label" for="budget_mode">Mode de budget IA</label>
+          <select id="budget_mode" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
+            <option value="custom" {% if defaults.budget_mode == "custom" %}selected{% endif %}>Personnalise</option>
+            <option value="budget_050_short" {% if defaults.budget_mode == "budget_050_short" %}selected{% endif %}>Budget 0,50€/jour (auto + shorts ON)</option>
+          </select>
+          <button class="btn-soft preset-btn" id="btn-budget-050" type="button">Appliquer le mode Budget 0,50€/jour</button>
+          <div class="hint">Applique automatiquement une configuration orientee opportunites, avec shorts actifs.</div>
+        </div>
+
         <label class="label" for="universe_file">Fichier d'univers</label>
         <input id="universe_file" type="text" value="{{ defaults.universe_file }}">
 
@@ -857,7 +919,7 @@
             </div>
           </div>
           <div class="table-wrap" style="margin-top:8px;">
-            <table>
+            <table class="mobile-stack-table">
               <thead>
                 <tr>
                   <th>Date</th>
@@ -937,6 +999,7 @@
 
     function configPayload() {
       return {
+        budget_mode: document.getElementById("budget_mode").value,
         universe_file: document.getElementById("universe_file").value.trim(),
         decision_engine: document.getElementById("decision_engine").value,
         preselect_top: Number(document.getElementById("preselect_top").value || 60),
@@ -960,6 +1023,18 @@
         no_finbert: document.getElementById("no_finbert").checked,
         no_budget_gate: document.getElementById("no_budget_gate").checked
       };
+    }
+
+    function applyBudget050Preset() {
+      document.getElementById("budget_mode").value = "budget_050_short";
+      document.getElementById("decision_engine").value = "llm";
+      document.getElementById("preselect_top").value = "90";
+      document.getElementById("max_deep").value = "18";
+      document.getElementById("watch_interval_min").value = "30";
+      document.getElementById("us_market_only").checked = true;
+      document.getElementById("allow_short").checked = true;
+      document.getElementById("no_budget_gate").checked = false;
+      setMessage("Mode Budget 0,50€/jour applique. Shorts actifs, surveillance 30 min, profondeur 18.");
     }
 
     function setMessage(text, error = false) {
@@ -1652,6 +1727,12 @@
     document.getElementById("btn-once").addEventListener("click", () => callAction("/api/run-once"));
     document.getElementById("btn-screen").addEventListener("click", () => callAction("/api/screen-only"));
     document.getElementById("btn-stop").addEventListener("click", stopProcess);
+    document.getElementById("btn-budget-050").addEventListener("click", applyBudget050Preset);
+    document.getElementById("budget_mode").addEventListener("change", (event) => {
+      if (String(event.target.value || "") === "budget_050_short") {
+        applyBudget050Preset();
+      }
+    });
     const btnConnectivityEl = document.getElementById("btn-connectivity");
     btnConnectivityEl.addEventListener("click", async () => {
       if (!connectivityPanelEl.classList.contains("hidden")) {

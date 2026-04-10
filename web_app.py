@@ -86,6 +86,10 @@ _BROKER_CACHE: dict[str, Any] = {
     "last_ok_report": None,
 }
 
+BUDGET_MODE_CUSTOM = "custom"
+BUDGET_MODE_050_SHORT = "budget_050_short"
+_SUPPORTED_BUDGET_MODES = {BUDGET_MODE_CUSTOM, BUDGET_MODE_050_SHORT}
+
 WEB_TIMEZONE = str(os.getenv("BUBO_WEB_TIMEZONE", "Europe/Paris") or "Europe/Paris").strip() or "Europe/Paris"
 try:
     _WEB_TZ = ZoneInfo(WEB_TIMEZONE)
@@ -129,6 +133,51 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_budget_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in _SUPPORTED_BUDGET_MODES:
+        return mode
+    return BUDGET_MODE_CUSTOM
+
+
+def _apply_budget_mode(cfg: dict[str, Any]) -> dict[str, Any]:
+    mode = _normalize_budget_mode(cfg.get("budget_mode", BUDGET_MODE_CUSTOM))
+    cfg["budget_mode"] = mode
+
+    if mode == BUDGET_MODE_050_SHORT:
+        # Preset "Budget 0,50€/jour": plus d'opportunites, LLM Flash, shorts actifs.
+        cfg["decision_engine"] = "llm"
+        cfg["preselect_top"] = 90
+        cfg["max_deep"] = 18
+        cfg["watch_interval_min"] = 30
+        cfg["us_market_only"] = True
+        cfg["allow_short"] = True
+        cfg["no_budget_gate"] = False
+        cfg["gemini_model_chain"] = "gemini-2.5-flash"
+        cfg["gemini_max_output_tokens"] = 900
+        cfg["gemini_thinking_budget"] = 0
+        cfg["gemini_prompt_max_events"] = 6
+        cfg["gemini_prompt_max_headlines"] = 5
+        cfg["gemini_prompt_max_posts"] = 3
+        cfg["gemini_prompt_max_post_chars"] = 120
+    return cfg
+
+
+def _build_process_env(cfg: dict[str, Any]) -> dict[str, str]:
+    env = os.environ.copy()
+    env["BUBO_BUDGET_MODE"] = str(cfg.get("budget_mode", BUDGET_MODE_CUSTOM))
+    env["BUBO_GEMINI_MODEL_CHAIN"] = str(cfg.get("gemini_model_chain", "gemini-2.5-flash"))
+    env["BUBO_GEMINI_MAX_OUTPUT_TOKENS"] = str(_coerce_int(cfg.get("gemini_max_output_tokens"), 700, minimum=256))
+    env["BUBO_GEMINI_THINKING_BUDGET"] = str(_coerce_int(cfg.get("gemini_thinking_budget"), 0, minimum=0))
+    env["BUBO_GEMINI_PROMPT_MAX_EVENTS"] = str(_coerce_int(cfg.get("gemini_prompt_max_events"), 4, minimum=0))
+    env["BUBO_GEMINI_PROMPT_MAX_HEADLINES"] = str(_coerce_int(cfg.get("gemini_prompt_max_headlines"), 3, minimum=0))
+    env["BUBO_GEMINI_PROMPT_MAX_POSTS"] = str(_coerce_int(cfg.get("gemini_prompt_max_posts"), 2, minimum=0))
+    env["BUBO_GEMINI_PROMPT_MAX_POST_CHARS"] = str(
+        _coerce_int(cfg.get("gemini_prompt_max_post_chars"), 80, minimum=20)
+    )
+    return env
 
 
 def _coerce_int(value: Any, default: int, minimum: int | None = None) -> int:
@@ -1454,6 +1503,7 @@ def get_default_config() -> dict[str, Any]:
     return {
         "decision_engine": os.getenv("BUBO_DECISION_ENGINE", "llm"),
         "universe_file": os.getenv("BUBO_UNIVERSE_FILE", "data/universe_us_1000_v1.txt"),
+        "budget_mode": _normalize_budget_mode(os.getenv("BUBO_BUDGET_MODE", BUDGET_MODE_CUSTOM)),
         "preselect_top": _coerce_int(os.getenv("BUBO_PRESELECT_TOP", "60"), 60, minimum=1),
         "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "8"), 8, minimum=1),
         "watch_interval_min": _coerce_int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30"), 30, minimum=1),
@@ -1478,6 +1528,21 @@ def get_default_config() -> dict[str, Any]:
         "ibkr_existing_positions_policy": os.getenv("BUBO_IBKR_EXISTING_POSITIONS_POLICY", "include"),
         "no_finbert": _env_bool("BUBO_NO_FINBERT", True),
         "no_budget_gate": _env_bool("BUBO_NO_BUDGET_GATE", False),
+        "gemini_model_chain": os.getenv("BUBO_GEMINI_MODEL_CHAIN", "gemini-2.5-flash"),
+        "gemini_max_output_tokens": _coerce_int(os.getenv("BUBO_GEMINI_MAX_OUTPUT_TOKENS", "700"), 700, minimum=256),
+        "gemini_thinking_budget": _coerce_int(os.getenv("BUBO_GEMINI_THINKING_BUDGET", "0"), 0, minimum=0),
+        "gemini_prompt_max_events": _coerce_int(os.getenv("BUBO_GEMINI_PROMPT_MAX_EVENTS", "4"), 4, minimum=0),
+        "gemini_prompt_max_headlines": _coerce_int(
+            os.getenv("BUBO_GEMINI_PROMPT_MAX_HEADLINES", "3"),
+            3,
+            minimum=0,
+        ),
+        "gemini_prompt_max_posts": _coerce_int(os.getenv("BUBO_GEMINI_PROMPT_MAX_POSTS", "2"), 2, minimum=0),
+        "gemini_prompt_max_post_chars": _coerce_int(
+            os.getenv("BUBO_GEMINI_PROMPT_MAX_POST_CHARS", "80"),
+            80,
+            minimum=20,
+        ),
     }
 
 
@@ -1489,6 +1554,8 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg["universe_file"] = str(payload.get("universe_file") or "").strip()
     if "decision_engine" in payload:
         cfg["decision_engine"] = str(payload.get("decision_engine") or "").strip().lower()
+    if "budget_mode" in payload:
+        cfg["budget_mode"] = _normalize_budget_mode(payload.get("budget_mode"))
     if "paper_state" in payload:
         cfg["paper_state"] = str(payload.get("paper_state") or "").strip()
     if "paper_webhook" in payload:
@@ -1524,12 +1591,44 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["paper_enabled"] = _coerce_bool(payload.get("paper_enabled"), cfg["paper_enabled"])
     cfg["no_finbert"] = _coerce_bool(payload.get("no_finbert"), cfg["no_finbert"])
     cfg["no_budget_gate"] = _coerce_bool(payload.get("no_budget_gate"), cfg["no_budget_gate"])
+    cfg["gemini_max_output_tokens"] = _coerce_int(
+        payload.get("gemini_max_output_tokens", cfg["gemini_max_output_tokens"]),
+        cfg["gemini_max_output_tokens"],
+        minimum=256,
+    )
+    cfg["gemini_thinking_budget"] = _coerce_int(
+        payload.get("gemini_thinking_budget", cfg["gemini_thinking_budget"]),
+        cfg["gemini_thinking_budget"],
+        minimum=0,
+    )
+    cfg["gemini_prompt_max_events"] = _coerce_int(
+        payload.get("gemini_prompt_max_events", cfg["gemini_prompt_max_events"]),
+        cfg["gemini_prompt_max_events"],
+        minimum=0,
+    )
+    cfg["gemini_prompt_max_headlines"] = _coerce_int(
+        payload.get("gemini_prompt_max_headlines", cfg["gemini_prompt_max_headlines"]),
+        cfg["gemini_prompt_max_headlines"],
+        minimum=0,
+    )
+    cfg["gemini_prompt_max_posts"] = _coerce_int(
+        payload.get("gemini_prompt_max_posts", cfg["gemini_prompt_max_posts"]),
+        cfg["gemini_prompt_max_posts"],
+        minimum=0,
+    )
+    cfg["gemini_prompt_max_post_chars"] = _coerce_int(
+        payload.get("gemini_prompt_max_post_chars", cfg["gemini_prompt_max_post_chars"]),
+        cfg["gemini_prompt_max_post_chars"],
+        minimum=20,
+    )
+    if "gemini_model_chain" in payload:
+        cfg["gemini_model_chain"] = str(payload.get("gemini_model_chain") or "").strip() or cfg["gemini_model_chain"]
     if cfg["decision_engine"] not in {"llm", "rules"}:
         cfg["decision_engine"] = "llm"
     cfg["paper_broker"] = "ibkr"
     if cfg["ibkr_existing_positions_policy"] not in {"include", "ignore"}:
         cfg["ibkr_existing_positions_policy"] = "include"
-    return cfg
+    return _apply_budget_mode(cfg)
 
 
 def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> tuple[list[str], dict[str, Any]]:
@@ -1608,6 +1707,7 @@ def _stream_process_output(proc: subprocess.Popen[str], mode: str):
 
 def start_process(mode: str, overrides: dict[str, Any] | None = None) -> tuple[bool, str, list[str] | None]:
     cmd, cfg = build_engine_command(mode, overrides)
+    proc_env = _build_process_env(cfg)
 
     with _STATE_LOCK:
         current = _RUN_STATE.get("process")
@@ -1618,6 +1718,7 @@ def start_process(mode: str, overrides: dict[str, Any] | None = None) -> tuple[b
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(BASE_DIR),
+                env=proc_env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

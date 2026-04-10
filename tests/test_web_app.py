@@ -117,6 +117,34 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_engine_command("invalid-mode", {})
 
+    def test_budget_050_short_preset_overrides_core_parameters(self):
+        cmd, cfg = build_engine_command(
+            "watch",
+            {
+                "budget_mode": "budget_050_short",
+                "allow_short": False,
+                "preselect_top": 10,
+                "max_deep": 5,
+                "watch_interval_min": 5,
+                "no_budget_gate": True,
+                "decision_engine": "rules",
+            },
+        )
+
+        self.assertEqual(cfg["budget_mode"], "budget_050_short")
+        self.assertEqual(cfg["decision_engine"], "llm")
+        self.assertEqual(cfg["preselect_top"], 90)
+        self.assertEqual(cfg["max_deep"], 18)
+        self.assertEqual(cfg["watch_interval_min"], 30)
+        self.assertTrue(cfg["allow_short"])
+        self.assertFalse(cfg["no_budget_gate"])
+        self.assertEqual(cfg["gemini_model_chain"], "gemini-2.5-flash")
+        self.assertEqual(cfg["gemini_max_output_tokens"], 900)
+        self.assertIn("--allow-short", cmd)
+        self.assertNotIn("--no-allow-short", cmd)
+        self.assertIn("--decision-engine", cmd)
+        self.assertIn("llm", cmd)
+
     @patch("web_app._compute_connectivity_report")
     def test_connectivity_report_uses_cache(self, compute_mock):
         compute_mock.return_value = {

@@ -50,6 +50,7 @@ http://IP_DU_NAS:7654
 - Pour les transactions Bubo, un bouton `Voir` affiche le detail de la decision IA (Gemini) capturee au moment de l'entree/sortie.
 - Les horodatages affiches dans l'UI sont normalises en heure de Paris.
 - L'affichage mobile privilegie un scroll horizontal natif des tableaux (stable et lisible), sans bascule en mode cartes.
+- Le panneau `Parametres` propose un preset `Budget 0,50€/jour (auto + shorts ON)` pour appliquer un mode cout/performance en 1 clic.
 - Les tableaux `Positions ouvertes` et `Historique des transactions` sont triables en cliquant sur les titres de colonnes (ascendant/descendant, numerique ou alphabetique selon la colonne).
 - Le KPI `P/L total` inclut le realise (positions fermees) + l'unrealized des positions ouvertes.
 - Un tableau `Sante LLM` affiche les erreurs par jour (volume, taux d'erreur, top erreur, modele dominant).
@@ -336,6 +337,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_WEB_SECRET` | Secret de session Flask | Requis en production | Chaine longue aleatoire | `change-this-secret` |
 | `BUBO_UNIVERSE_FILE` | Fichier univers actions | Non | Chemin lisible dans le container (ex: `data/universe_us_1000_v1.txt`) | `data/universe_us_1000_v1.txt` |
 | `BUBO_DECISION_ENGINE` | Moteur de decision trading | Non | `llm` (Gemini) ou `rules` | `llm` |
+| `BUBO_BUDGET_MODE` | Preset auto de budget IA applique au lancement (depuis UI ou env) | Non | `custom`, `budget_050_short` | `custom` |
 | `BUBO_GEMINI_MODEL_CHAIN` | Liste des modeles Gemini essayes (ordre de fallback) | Non | Liste separee par virgules (ex: `gemini-2.5-flash` ou `gemini-2.5-flash,gemini-2.5-pro`) | `gemini-2.5-flash` |
 | `BUBO_GEMINI_MAX_OUTPUT_TOKENS` | Limite de tokens de sortie par decision LLM | Non | Entier `256..2048` | `700` |
 | `BUBO_GEMINI_THINKING_BUDGET` | Budget de raisonnement interne Gemini (0 = sortie JSON plus stable) | Non | Entier `0..2048` | `0` |
