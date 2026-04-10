@@ -515,23 +515,18 @@
       color: #173749;
     }
 
-    .tx-window {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-left: auto;
-      min-width: 260px;
-    }
-
-    .tx-window input[type="range"] {
-      width: 180px;
-    }
-
     .tx-window-label {
       color: #4a6473;
-      min-width: 92px;
+      margin-left: auto;
+      min-width: 120px;
       text-align: right;
       font-variant-numeric: tabular-nums;
+    }
+
+    .tx-table-scroll {
+      max-height: 520px;
+      overflow: auto;
+      border-top: 1px solid #e3e9ee;
     }
 
     .tx-ai-box {
@@ -582,6 +577,84 @@
       #logs { min-height: 280px; max-height: 280px; }
       .portfolio-grid { grid-template-columns: 1fr; }
       .kpi-line { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 760px) {
+      .wrap {
+        padding: 12px 10px 22px;
+      }
+
+      .hero {
+        padding: 14px 12px;
+      }
+
+      .hero h1 {
+        font-size: 1.24rem;
+      }
+
+      .card {
+        padding: 10px;
+        border-radius: 10px;
+      }
+
+      .toolbar {
+        flex-wrap: wrap;
+      }
+
+      .toolbar-right {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .tx-window-label {
+        margin-left: 0;
+      }
+
+      .tx-table-scroll {
+        max-height: 58vh;
+      }
+
+      .kpi-line {
+        grid-template-columns: 1fr;
+      }
+
+      table.mobile-stack-table {
+        min-width: 100%;
+      }
+
+      table.mobile-stack-table thead {
+        display: none;
+      }
+
+      table.mobile-stack-table tbody tr {
+        display: block;
+        border-bottom: 1px solid #e3e9ee;
+      }
+
+      table.mobile-stack-table tbody td {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 10px;
+        border-bottom: none;
+        padding: 7px 10px;
+      }
+
+      table.mobile-stack-table tbody td::before {
+        content: attr(data-label);
+        font-weight: 700;
+        color: #4d6a7a;
+        flex: 0 0 42%;
+        max-width: 42%;
+      }
+
+      table.mobile-stack-table tbody tr.tx-ai-detail td {
+        display: block;
+      }
+
+      table.mobile-stack-table tbody tr.tx-ai-detail td::before {
+        content: none;
+      }
     }
   </style>
 </head>
@@ -754,7 +827,7 @@
           <div id="portfolio-kpis"><div class="kpi">Chargement...</div></div>
           <div class="table-wrap" style="margin-top:8px;">
             <h3>Positions ouvertes</h3>
-            <table>
+            <table class="mobile-stack-table">
               <thead>
                 <tr>
                   <th class="sortable" data-sort-table="positions" data-sort-key="name">Nom</th>
@@ -782,31 +855,29 @@
                 <option value="entries">Entrées</option>
                 <option value="exits">Sorties</option>
               </select>
-              <div class="tx-window">
-                <label for="tx-window-slider">Parcourir</label>
-                <input id="tx-window-slider" type="range" min="0" max="0" step="1" value="0">
-                <span class="tx-window-label" id="tx-window-label">0 / 0</span>
-              </div>
+              <span class="tx-window-label" id="tx-window-label">Affichage: 0 / 0</span>
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="timestamp">Date</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="source">Source</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="name">Nom</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="ticker">Symbole</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="side">Action</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="quantity">Quantite</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="price">Prix</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="reason">Raison</th>
-                  <th class="sortable" data-sort-table="transactions" data-sort-key="realized_pnl">P/L realise</th>
-                  <th>IA</th>
-                </tr>
-              </thead>
-              <tbody id="ibkr-exec-body">
-                <tr><td colspan="10">Chargement...</td></tr>
-              </tbody>
-            </table>
+            <div class="tx-table-scroll">
+              <table class="mobile-stack-table">
+                <thead>
+                  <tr>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="timestamp">Date</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="source">Source</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="name">Nom</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="ticker">Symbole</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="side">Action</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="quantity">Quantite</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="price">Prix</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="reason">Raison</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="realized_pnl">P/L realise</th>
+                    <th>IA</th>
+                  </tr>
+                </thead>
+                <tbody id="ibkr-exec-body">
+                  <tr><td colspan="10">Chargement...</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
         <div class="subcard">
@@ -882,14 +953,12 @@
     const portfolioPosBodyEl = document.getElementById("portfolio-pos-body");
     const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
     const txFilterEl = document.getElementById("tx-filter");
-    const txWindowSliderEl = document.getElementById("tx-window-slider");
     const txWindowLabelEl = document.getElementById("tx-window-label");
     const llmHealthMetaEl = document.getElementById("llm-health-meta");
     const llmHealthBodyEl = document.getElementById("llm-health-body");
     let lastPortfolioRefreshEpoch = 0;
     const PORTFOLIO_AUTO_REFRESH_MS = 60000;
-    const TX_WINDOW_SIZE = 50;
-    let txWindowStart = 0;
+    const TX_RENDER_LIMIT = 300;
     let latestPositionRows = [];
     let latestTxRows = [];
     let latestTxCurrency = "USD";
@@ -1118,7 +1187,6 @@
       if (tableName === "positions") {
         renderPositions();
       } else if (tableName === "transactions") {
-        txWindowStart = 0;
         renderTransactions();
       }
     }
@@ -1139,13 +1207,13 @@
         const currency = String(pos.currency || "USD");
         return `
           <tr>
-            <td>${escapeHtml(pos.name || "n/a")}</td>
-            <td>${escapeHtml(pos.symbol || "n/a")}</td>
-            <td>${qty.toFixed(0)}</td>
-            <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
-            <td>${Number.isFinite(entry) ? entry.toFixed(2) : "n/a"}</td>
-            <td>${Number.isFinite(value) ? fmtMoney(value, currency) : "n/a"}</td>
-            <td class="${pnlClassName}">${fmtSignedMoney(pnl, currency)}</td>
+            <td data-label="Nom">${escapeHtml(pos.name || "n/a")}</td>
+            <td data-label="Symbole">${escapeHtml(pos.symbol || "n/a")}</td>
+            <td data-label="Quantité">${qty.toFixed(0)}</td>
+            <td data-label="Prix moyen">${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
+            <td data-label="Prix d'entrée">${Number.isFinite(entry) ? entry.toFixed(2) : "n/a"}</td>
+            <td data-label="Valeur">${Number.isFinite(value) ? fmtMoney(value, currency) : "n/a"}</td>
+            <td data-label="P/L" class="${pnlClassName}">${fmtSignedMoney(pnl, currency)}</td>
           </tr>
         `;
       }).join("");
@@ -1158,31 +1226,16 @@
         "transactions"
       );
       const total = rows.length;
-      const maxStart = Math.max(0, total - TX_WINDOW_SIZE);
-      txWindowStart = Math.max(0, Math.min(txWindowStart, maxStart));
-
-      if (txWindowSliderEl) {
-        txWindowSliderEl.min = "0";
-        txWindowSliderEl.max = String(maxStart);
-        txWindowSliderEl.step = "1";
-        txWindowSliderEl.value = String(txWindowStart);
-        txWindowSliderEl.disabled = total <= TX_WINDOW_SIZE;
-      }
-      if (txWindowLabelEl) {
-        if (!total) {
-          txWindowLabelEl.textContent = "0 / 0";
-        } else {
-          const start = txWindowStart + 1;
-          const end = Math.min(total, txWindowStart + TX_WINDOW_SIZE);
-          txWindowLabelEl.textContent = `${start}-${end} / ${total}`;
-        }
-      }
 
       if (!rows.length) {
         ibkrExecBodyEl.innerHTML = "<tr><td colspan='10'>Aucune transaction pour ce filtre.</td></tr>";
+        if (txWindowLabelEl) txWindowLabelEl.textContent = "Affichage: 0 / 0";
         return;
       }
-      const visibleRows = rows.slice(txWindowStart, txWindowStart + TX_WINDOW_SIZE);
+      const visibleRows = rows.slice(0, TX_RENDER_LIMIT);
+      if (txWindowLabelEl) {
+        txWindowLabelEl.textContent = `Affichage: ${visibleRows.length} / ${total}`;
+      }
       ibkrExecBodyEl.innerHTML = visibleRows.map((tx, idx) => {
         const qty = Math.abs(asNumber(tx.quantity, 0));
         const px = maybeNumber(tx.price);
@@ -1190,7 +1243,7 @@
         const reason = String(tx.reason || "") || "-";
         const name = String(tx.name || tx.ticker || "").trim() || "n/a";
         const llmSnapshot = (tx.llm_snapshot && typeof tx.llm_snapshot === "object") ? tx.llm_snapshot : null;
-        const rowId = `tx-ai-${txWindowStart + idx}`;
+        const rowId = `tx-ai-${idx}`;
         const aiCell = llmSnapshot
           ? `<button class="btn-soft tx-ai-btn" type="button" data-target="${rowId}">Voir</button>`
           : "<span style='color:#8aa0af;'>-</span>";
@@ -1199,23 +1252,23 @@
           : "-";
         const detailRow = llmSnapshot
           ? `
-            <tr id="${rowId}" class="hidden">
-              <td colspan="10"><div class="tx-ai-box">${escapeHtml(formatTxLlmSnapshot(llmSnapshot))}</div></td>
+            <tr id="${rowId}" class="tx-ai-detail hidden">
+              <td colspan="10" data-label=""><div class="tx-ai-box">${escapeHtml(formatTxLlmSnapshot(llmSnapshot))}</div></td>
             </tr>
           `
           : "";
         return `
           <tr>
-            <td>${escapeHtml(tx.timestamp || "")}</td>
-            <td>${txSourceBadge(String(tx.source || ""))}</td>
-            <td>${escapeHtml(name)}</td>
-            <td>${escapeHtml(tx.ticker || "")}</td>
-            <td>${escapeHtml(normalizeSide(tx.side || ""))}</td>
-            <td>${qty.toFixed(0)}</td>
-            <td>${Number.isFinite(px) ? px.toFixed(4) : "n/a"}</td>
-            <td>${escapeHtml(reason)}</td>
-            <td>${pnlCell}</td>
-            <td>${aiCell}</td>
+            <td data-label="Date">${escapeHtml(tx.timestamp || "")}</td>
+            <td data-label="Source">${txSourceBadge(String(tx.source || ""))}</td>
+            <td data-label="Nom">${escapeHtml(name)}</td>
+            <td data-label="Symbole">${escapeHtml(tx.ticker || "")}</td>
+            <td data-label="Action">${escapeHtml(normalizeSide(tx.side || ""))}</td>
+            <td data-label="Quantité">${qty.toFixed(0)}</td>
+            <td data-label="Prix">${Number.isFinite(px) ? px.toFixed(4) : "n/a"}</td>
+            <td data-label="Raison">${escapeHtml(reason)}</td>
+            <td data-label="P/L réalisé">${pnlCell}</td>
+            <td data-label="IA">${aiCell}</td>
           </tr>
           ${detailRow}
         `;
@@ -1630,13 +1683,6 @@
     refreshSortHeaders("transactions");
     if (txFilterEl) {
       txFilterEl.addEventListener("change", () => {
-        txWindowStart = 0;
-        renderTransactions();
-      });
-    }
-    if (txWindowSliderEl) {
-      txWindowSliderEl.addEventListener("input", () => {
-        txWindowStart = Math.max(0, parseInt(String(txWindowSliderEl.value || "0"), 10) || 0);
         renderTransactions();
       });
     }
