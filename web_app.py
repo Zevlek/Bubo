@@ -256,6 +256,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
             if entry_ts:
                 events.append(
                     {
+                        "source": "bubo",
                         "timestamp": entry_ts,
                         "ticker": ticker,
                         "side": entry_side,
@@ -272,6 +273,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
             if exit_ts:
                 events.append(
                     {
+                        "source": "bubo",
                         "timestamp": exit_ts,
                         "ticker": ticker,
                         "side": exit_side,
@@ -295,6 +297,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
         is_short = shares < 0
         events.append(
             {
+                "source": "bubo",
                 "timestamp": str(pos.get("entry_date", "") or ""),
                 "ticker": ticker,
                 "side": "SHORT SELL" if is_short else "BUY",

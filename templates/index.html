@@ -444,6 +444,14 @@
       font-weight: 600;
     }
 
+    .kpi-card .k-val.pnl-pos {
+      color: #1e8449;
+    }
+
+    .kpi-card .k-val.pnl-neg {
+      color: #c0392b;
+    }
+
     .pnl-pos {
       color: #1e8449;
       font-weight: 700;
@@ -461,6 +469,51 @@
       border-bottom: 1px solid #e3e9ee;
       font-size: 0.82rem;
       color: #29485a;
+    }
+
+    .tx-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #f8fbfd;
+      border-bottom: 1px solid #e3e9ee;
+      font-size: 0.8rem;
+      color: #375666;
+    }
+
+    .tx-toolbar select {
+      border: 1px solid #c5d1da;
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 0.8rem;
+      background: #ffffff;
+      color: #173749;
+    }
+
+    .tx-source {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 58px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      border: 1px solid transparent;
+      letter-spacing: 0.2px;
+    }
+
+    .tx-source.bubo {
+      background: #e7f4ff;
+      border-color: #bddcf4;
+      color: #0f5f83;
+    }
+
+    .tx-source.ibkr {
+      background: #f1f3f6;
+      border-color: #d9dfe5;
+      color: #4a5a67;
     }
 
     @media (max-width: 980px) {
@@ -659,10 +712,21 @@
           </div>
           <div class="table-wrap" style="margin-top:8px;">
             <h3>Historique des transactions Bubo</h3>
+            <div class="tx-toolbar">
+              <span>Filtre</span>
+              <select id="tx-filter">
+                <option value="all">Tout</option>
+                <option value="bubo">Source Bubo</option>
+                <option value="ibkr">Source IBKR</option>
+                <option value="entries">Entrées</option>
+                <option value="exits">Sorties</option>
+              </select>
+            </div>
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
+                  <th>Source</th>
                   <th>Symbole</th>
                   <th>Action</th>
                   <th>Quantite</th>
@@ -672,7 +736,7 @@
                 </tr>
               </thead>
               <tbody id="ibkr-exec-body">
-                <tr><td colspan="7">Chargement...</td></tr>
+                <tr><td colspan="8">Chargement...</td></tr>
               </tbody>
             </table>
           </div>
@@ -749,10 +813,13 @@
     const portfolioKpisEl = document.getElementById("portfolio-kpis");
     const portfolioPosBodyEl = document.getElementById("portfolio-pos-body");
     const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
+    const txFilterEl = document.getElementById("tx-filter");
     const llmHealthMetaEl = document.getElementById("llm-health-meta");
     const llmHealthBodyEl = document.getElementById("llm-health-body");
     let lastPortfolioRefreshEpoch = 0;
     const PORTFOLIO_AUTO_REFRESH_MS = 60000;
+    let latestTxRows = [];
+    let latestTxCurrency = "USD";
 
     function configPayload() {
       return {
@@ -848,6 +915,74 @@
       const count = asNumber(top.count, 0);
       if (!label) return "-";
       return `${label} (${count})`;
+    }
+
+    function normalizeSide(side) {
+      const raw = String(side || "").trim().toUpperCase();
+      if (raw === "BOT") return "BUY";
+      if (raw === "SLD") return "SELL";
+      return raw;
+    }
+
+    function toCoreSide(side) {
+      const n = normalizeSide(side);
+      if (n === "SHORT SELL") return "SELL";
+      if (n === "BUY_TO_COVER") return "BUY";
+      return n;
+    }
+
+    function txMatchKey(tx) {
+      const date = String(tx.timestamp || "").slice(0, 10);
+      const ticker = String(tx.ticker || "").trim().toUpperCase();
+      const side = toCoreSide(tx.side);
+      const qty = Math.abs(asNumber(tx.quantity, 0)).toFixed(0);
+      return `${date}|${ticker}|${side}|${qty}`;
+    }
+
+    function txFilterMatch(row, mode) {
+      const source = String(row.source || "");
+      const event = String(row.event || "").toLowerCase();
+      const side = normalizeSide(row.side);
+      if (mode === "bubo") return source === "bubo";
+      if (mode === "ibkr") return source === "ibkr";
+      if (mode === "entries") return event === "entry" || event === "open" || side === "BUY" || side === "SHORT SELL";
+      if (mode === "exits") return event === "exit" || side === "SELL" || side === "BUY_TO_COVER";
+      return true;
+    }
+
+    function txSourceBadge(source) {
+      if (source === "bubo") return `<span class="tx-source bubo">BUBO</span>`;
+      return `<span class="tx-source ibkr">IBKR</span>`;
+    }
+
+    function renderTransactions() {
+      const mode = txFilterEl ? String(txFilterEl.value || "all") : "all";
+      const rows = latestTxRows.filter(row => txFilterMatch(row, mode));
+      if (!rows.length) {
+        ibkrExecBodyEl.innerHTML = "<tr><td colspan='8'>Aucune transaction pour ce filtre.</td></tr>";
+        return;
+      }
+      ibkrExecBodyEl.innerHTML = rows.slice(0, 150).map(tx => {
+        const qty = Math.abs(asNumber(tx.quantity, 0));
+        const px = maybeNumber(tx.price);
+        const realized = maybeNumber(tx.realized_pnl);
+        const reason = String(tx.reason || "") || "-";
+        const pnlCell = Number.isFinite(realized)
+          ? `<span class="${pnlClass(realized)}">${fmtSignedMoney(realized, latestTxCurrency)}</span>`
+          : "-";
+        return `
+          <tr>
+            <td>${escapeHtml(tx.timestamp || "")}</td>
+            <td>${txSourceBadge(String(tx.source || ""))}</td>
+            <td>${escapeHtml(tx.ticker || "")}</td>
+            <td>${escapeHtml(normalizeSide(tx.side || ""))}</td>
+            <td>${qty.toFixed(0)}</td>
+            <td>${Number.isFinite(px) ? px.toFixed(4) : "n/a"}</td>
+            <td>${escapeHtml(reason)}</td>
+            <td>${pnlCell}</td>
+          </tr>
+        `;
+      }).join("");
     }
 
     function connectivityBadgeLabel(state) {
@@ -1125,35 +1260,49 @@
           }).join("");
         }
 
-        const history = Array.isArray(paper.transactions) ? paper.transactions : [];
-        if (!history.length) {
-          ibkrExecBodyEl.innerHTML = "<tr><td colspan='7'>Aucune transaction Bubo disponible.</td></tr>";
-        } else {
-          ibkrExecBodyEl.innerHTML = history.slice(0, 120).map(tx => {
-            const qty = Math.abs(asNumber(tx.quantity, 0));
-            const px = maybeNumber(tx.price);
-            const realized = maybeNumber(tx.realized_pnl);
-            const reason = String(tx.reason || "") || "-";
-            const pnlCell = Number.isFinite(realized)
-              ? `<span class="${pnlClass(realized)}">${fmtSignedMoney(realized, currency)}</span>`
-              : "-";
-            return `
-              <tr>
-                <td>${escapeHtml(tx.timestamp || "")}</td>
-                <td>${escapeHtml(tx.ticker || "")}</td>
-                <td>${escapeHtml(tx.side || "")}</td>
-                <td>${qty.toFixed(0)}</td>
-                <td>${Number.isFinite(px) ? px.toFixed(4) : "n/a"}</td>
-                <td>${escapeHtml(reason)}</td>
-                <td>${pnlCell}</td>
-              </tr>
-            `;
-          }).join("");
-        }
+        const buboRows = (Array.isArray(paper.transactions) ? paper.transactions : []).map(tx => ({
+          source: "bubo",
+          timestamp: tx.timestamp,
+          ticker: tx.ticker,
+          side: tx.side,
+          quantity: tx.quantity,
+          price: tx.price,
+          reason: tx.reason,
+          realized_pnl: tx.realized_pnl,
+          event: tx.event
+        }));
+
+        const buboKeys = new Set(
+          buboRows
+            .filter(tx => String(tx.event || "").toLowerCase() !== "open")
+            .map(tx => txMatchKey(tx))
+        );
+
+        const ibkrRowsRaw = ibkrAvailable && Array.isArray(ibkr.executions)
+          ? ibkr.executions.map(ex => ({
+              source: "ibkr",
+              timestamp: ex.time,
+              ticker: ex.symbol,
+              side: ex.side,
+              quantity: ex.shares,
+              price: ex.price,
+              reason: "execution_ibkr",
+              realized_pnl: ex.realized_pnl,
+              event: "execution"
+            }))
+          : [];
+
+        const ibkrRows = ibkrRowsRaw.filter(tx => !buboKeys.has(txMatchKey(tx)));
+        latestTxRows = [...buboRows, ...ibkrRows].sort(
+          (a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || ""))
+        );
+        latestTxCurrency = currency;
+        renderTransactions();
 
         const mode = ibkrAvailable ? (ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB direct") : "BUBO local";
         const stale = ibkrAvailable && ibkr.stale ? ` | donnees figees (${String(ibkr.stale_reason || "echec refresh")})` : "";
-        portfolioMetaEl.textContent = `${mode}${stale} | Tx Bubo: ${history.length} | ${data.generated_at || ""}`;
+        portfolioMetaEl.textContent =
+          `${mode}${stale} | Tx Bubo: ${buboRows.length} | Tx IBKR: ${ibkrRows.length} | ${data.generated_at || ""}`;
       } catch (err) {
         portfolioMetaEl.textContent = `Erreur snapshot: ${escapeHtml(err)}`;
       }
@@ -1222,6 +1371,9 @@
     });
     document.getElementById("btn-portfolio").addEventListener("click", () => refreshPortfolio(true));
     document.getElementById("btn-llm-health").addEventListener("click", () => refreshLlmHealth(true));
+    if (txFilterEl) {
+      txFilterEl.addEventListener("change", () => renderTransactions());
+    }
     document.getElementById("btn-settings-toggle").addEventListener("click", () => {
       settingsPanelEl.classList.toggle("hidden");
     });
