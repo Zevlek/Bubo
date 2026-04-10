@@ -44,7 +44,9 @@ http://IP_DU_NAS:7654
 - Le diagnostic API/IBKR est manuel et repliable (bouton `Verifier les API` puis `Masquer les API`).
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
 - Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.
-- L'historique affiche une vue fusionnee Bubo + IBKR, avec filtre (`Tout`, `Bubo`, `IBKR`, `Entrees`, `Sorties`), une colonne source, raison et P/L realise sur les sorties.
+- L'historique affiche une vue fusionnee Bubo + IBKR, avec filtre (`Tout`, `Bubo`, `IBKR`, `Entrees`, `Sorties`), nom d'action, source, raison et P/L realise sur les sorties.
+- Le tableau historique est fenetre par defaut (50 lignes visibles) avec un slider de navigation pour parcourir rapidement le reste.
+- Pour les transactions Bubo, un bouton `Voir` affiche le detail de la decision IA (Gemini) capturee au moment de l'entree/sortie.
 - Les tableaux `Positions ouvertes` et `Historique des transactions` sont triables en cliquant sur les titres de colonnes (ascendant/descendant, numerique ou alphabetique selon la colonne).
 - Le KPI `P/L total` inclut le realise (positions fermees) + l'unrealized des positions ouvertes.
 - Un tableau `Sante LLM` affiche les erreurs par jour (volume, taux d'erreur, top erreur, modele dominant).

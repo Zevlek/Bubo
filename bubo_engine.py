@@ -2130,6 +2130,44 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     warnings_list = []
     price_cache = {}
     empty_sync_streak = int(state.get("ibkr_empty_sync_streak", 0) or 0)
+
+    def _clean_text_list(values: object, *, limit: int = 4, max_len: int = 280) -> list[str]:
+        out: list[str] = []
+        if not isinstance(values, (list, tuple)):
+            return out
+        for raw in values:
+            txt = str(raw or "").strip()
+            if not txt:
+                continue
+            if len(txt) > max_len:
+                txt = txt[: max_len - 1].rstrip() + "…"
+            out.append(txt)
+            if len(out) >= max(0, int(limit)):
+                break
+        return out
+
+    def _decision_snapshot(row: object) -> dict[str, object]:
+        if not isinstance(row, dict):
+            return {}
+        ticker = str(row.get("ticker", "") or "").strip().upper()
+        decision = str(row.get("decision", "") or "").strip().upper()
+        if not ticker and not decision:
+            return {}
+        snapshot: dict[str, object] = {
+            "captured_at": _paper_now(),
+            "ticker": ticker,
+            "name": str(row.get("name", "") or "").strip(),
+            "decision": decision,
+            "score": float(row.get("final_score", 50.0) or 50.0),
+            "confidence": float(row.get("confidence", 0.0) or 0.0),
+            "position_size_pct": float(row.get("position_size_pct", 0.0) or 0.0),
+            "llm_status": str(row.get("llm_status", "") or "").strip(),
+            "llm_model": str(row.get("llm_model", "") or "").strip(),
+            "llm_error": str(row.get("llm_error", "") or "").strip(),
+            "reasons": _clean_text_list(row.get("reasons"), limit=4),
+            "warnings": _clean_text_list(row.get("warnings"), limit=4),
+        }
+        return snapshot
     ibkr = None
     ibkr_trading_disabled = False
     if broker == "ibkr":
@@ -2165,6 +2203,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     upnl = float((shares * (last_price - avg_cost)) - entry_fee)
                     synced[ticker] = {
                         "ticker": ticker,
+                        "name": str(prev.get("name", ticker) or ticker),
                         "shares": int(shares),
                         "entry_price": float(avg_cost),
                         "entry_fee": float(entry_fee),
@@ -2172,6 +2211,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                         "last_price": float(last_price),
                         "market_value": float(mv),
                         "unrealized_pnl": float(upnl),
+                        "entry_signal": prev.get("entry_signal", {}),
                     }
                 had_positions = bool(positions)
                 if had_positions and not synced:
@@ -2260,7 +2300,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         base += max(-5.0, min(5.0, (conf - 50.0) * 0.1))
         return float(base)
 
-    def _close_position(ticker: str, exit_reason: str) -> bool:
+    def _close_position(ticker: str, exit_reason: str, exit_signal: dict[str, object] | None = None) -> bool:
         pos_row = positions.get(ticker)
         if not isinstance(pos_row, dict):
             return False
@@ -2338,6 +2378,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         state["trades"].append(
             {
                 "ticker": ticker,
+                "name": str(pos_row.get("name", ticker) or ticker),
                 "entry_date": pos_row.get("entry_date"),
                 "exit_date": date.today().isoformat(),
                 "entry_price": round(entry_price, 4),
@@ -2348,6 +2389,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 "pnl": round(pnl, 4),
                 "exit_reason": exit_reason,
                 "hold_days": int(hold_days),
+                "entry_signal": pos_row.get("entry_signal", {}),
+                "exit_signal": exit_signal or {},
             }
         )
 
@@ -2400,7 +2443,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 exit_reason = "take_profit"
 
         if exit_reason:
-            _close_position(ticker, exit_reason)
+            exit_snapshot = _decision_snapshot(results.get(ticker, {}) if isinstance(results, dict) else {})
+            _close_position(ticker, exit_reason, exit_snapshot)
 
     def positions_market_value() -> float:
         total = 0.0
@@ -2485,7 +2529,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 )
                 continue
 
-            if not _close_position(weakest_ticker, "rotation"):
+            weakest_snapshot = _decision_snapshot(results.get(weakest_ticker, {}) if isinstance(results, dict) else {})
+            if not _close_position(weakest_ticker, "rotation", weakest_snapshot):
                 continue
             rotation_count += 1
             warnings_list.append(
@@ -2578,6 +2623,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         signed_shares = -int(shares) if is_short_entry else int(shares)
         positions[ticker] = {
             "ticker": ticker,
+            "name": str(r.get("name", ticker) or ticker),
             "shares": int(signed_shares),
             "entry_price": float(exec_px),
             "entry_fee": float(entry_fee),
@@ -2585,6 +2631,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             "last_price": float(px),
             "market_value": float(signed_shares * px),
             "unrealized_pnl": float((signed_shares * (px - exec_px)) - entry_fee),
+            "entry_signal": _decision_snapshot(r),
         }
         action_label = "SHORT SELL" if is_short_entry else "BUY"
         actions.append(f"{action_label} {ticker} x{shares}")

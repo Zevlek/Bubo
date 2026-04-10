@@ -168,6 +168,16 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _clean_symbol_name(raw_name: Any, symbol: str) -> str:
+    name = str(raw_name or "").strip()
+    if not name:
+        return symbol
+    # Avoid duplicated "name == symbol" noise while keeping useful names.
+    if name.upper() == symbol.upper():
+        return symbol
+    return name
+
+
 def _read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
         return {}
@@ -239,6 +249,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
             ticker = str(trade.get("ticker", "") or "").strip().upper()
             if not ticker:
                 continue
+            display_name = str(trade.get("name", "") or "").strip() or ticker
 
             shares = _safe_int(trade.get("shares"), 0)
             qty = abs(shares)
@@ -251,6 +262,8 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
             entry_fee = _safe_float_or_none(trade.get("entry_fee"))
             exit_fee = _safe_float_or_none(trade.get("exit_fee"))
             realized = _safe_float_or_none(trade.get("pnl"))
+            entry_signal = trade.get("entry_signal") if isinstance(trade.get("entry_signal"), dict) else {}
+            exit_signal = trade.get("exit_signal") if isinstance(trade.get("exit_signal"), dict) else {}
 
             entry_ts = str(trade.get("entry_date", "") or "").strip()
             if entry_ts:
@@ -258,6 +271,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                     {
                         "source": "bubo",
                         "timestamp": entry_ts,
+                        "name": display_name,
                         "ticker": ticker,
                         "side": entry_side,
                         "quantity": int(qty),
@@ -265,6 +279,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                         "commission": entry_fee,
                         "reason": entry_reason,
                         "realized_pnl": None,
+                        "llm_snapshot": entry_signal,
                         "event": "entry",
                     }
                 )
@@ -275,6 +290,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                     {
                         "source": "bubo",
                         "timestamp": exit_ts,
+                        "name": display_name,
                         "ticker": ticker,
                         "side": exit_side,
                         "quantity": int(qty),
@@ -282,6 +298,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                         "commission": exit_fee,
                         "reason": str(trade.get("exit_reason", "") or ""),
                         "realized_pnl": realized,
+                        "llm_snapshot": exit_signal,
                         "event": "exit",
                     }
                 )
@@ -299,6 +316,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
             {
                 "source": "bubo",
                 "timestamp": str(pos.get("entry_date", "") or ""),
+                "name": str(pos.get("name", "") or "").strip() or ticker,
                 "ticker": ticker,
                 "side": "SHORT SELL" if is_short else "BUY",
                 "quantity": abs(shares),
@@ -306,6 +324,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                 "commission": _safe_float_or_none(pos.get("entry_fee")),
                 "reason": "position_open",
                 "realized_pnl": None,
+                "llm_snapshot": (pos.get("entry_signal") if isinstance(pos.get("entry_signal"), dict) else {}),
                 "event": "open",
             }
         )
@@ -329,6 +348,7 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
             positions.append(
                 {
                     "ticker": str(ticker),
+                    "name": str(pos.get("name", "") or "").strip() or str(ticker),
                     "shares": _safe_int(pos.get("shares"), 0),
                     "entry_price": _safe_float(pos.get("entry_price"), 0.0),
                     "last_price": _safe_float(pos.get("last_price"), 0.0),
@@ -336,6 +356,7 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
                     "unrealized_pnl": _safe_float(pos.get("unrealized_pnl"), 0.0),
                     "entry_fee": _safe_float(pos.get("entry_fee"), 0.0),
                     "entry_date": str(pos.get("entry_date", "")),
+                    "entry_signal": pos.get("entry_signal") if isinstance(pos.get("entry_signal"), dict) else {},
                 }
             )
     positions.sort(key=lambda r: abs(_safe_float(r.get("market_value"), 0.0)), reverse=True)
@@ -487,6 +508,9 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                 currency = str(getattr(row, "currency", "") or "")
 
         positions = []
+        contracts_for_details: dict[int, Any] = {}
+        names_by_con_id: dict[int, str] = {}
+        names_by_symbol: dict[str, str] = {}
         contracts_to_quote: list[Any] = []
         quoted_contract_ids: set[int] = set()
         try:
@@ -508,6 +532,8 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                 if abs(qty) < 1e-12:
                     continue
                 con_id = _safe_int(getattr(contract, "conId", 0) if contract is not None else 0, 0)
+                if contract is not None and con_id > 0 and con_id not in contracts_for_details:
+                    contracts_for_details[con_id] = contract
                 market_price = _safe_float_or_none(getattr(p, "marketPrice", None))
                 if (
                     contract is not None
@@ -521,6 +547,7 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                     {
                         "account": row_account,
                         "symbol": symbol,
+                        "name": _clean_symbol_name(getattr(contract, "description", "") if contract is not None else "", symbol),
                         "exchange": str(getattr(contract, "exchange", "") or ""),
                         "currency": str(getattr(contract, "currency", "") or ""),
                         "quantity": qty,
@@ -549,6 +576,8 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                 if abs(qty) < 1e-12:
                     continue
                 con_id = _safe_int(getattr(contract, "conId", 0) if contract is not None else 0, 0)
+                if contract is not None and con_id > 0 and con_id not in contracts_for_details:
+                    contracts_for_details[con_id] = contract
                 market_price = _safe_float_or_none(getattr(p, "marketPrice", None))
                 if (
                     contract is not None
@@ -562,6 +591,7 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                     {
                         "account": row_account,
                         "symbol": symbol,
+                        "name": _clean_symbol_name(getattr(contract, "description", "") if contract is not None else "", symbol),
                         "exchange": str(getattr(contract, "exchange", "") or ""),
                         "currency": str(getattr(contract, "currency", "") or ""),
                         "quantity": qty,
@@ -573,6 +603,36 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                         "_con_id": con_id,
                     }
                 )
+
+        if contracts_for_details:
+            for con_id, contract in list(contracts_for_details.items())[:80]:
+                try:
+                    details = ib.reqContractDetails(contract) or []
+                except Exception:
+                    details = []
+                if not details:
+                    continue
+                detail = details[0]
+                long_name = str(
+                    getattr(detail, "longName", "")
+                    or getattr(detail, "marketName", "")
+                    or ""
+                ).strip()
+                if long_name:
+                    names_by_con_id[con_id] = long_name
+
+        for pos in positions:
+            con_id = _safe_int(pos.get("_con_id"), 0)
+            symbol = str(pos.get("symbol", "") or "").strip().upper()
+            name = ""
+            if con_id > 0:
+                name = str(names_by_con_id.get(con_id, "") or "").strip()
+            if not name:
+                name = str(pos.get("name", "") or "").strip()
+            name = _clean_symbol_name(name, symbol or "N/A")
+            pos["name"] = name
+            if symbol:
+                names_by_symbol[symbol] = name
 
         if contracts_to_quote:
             try:
@@ -646,6 +706,21 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
             symbol = str(getattr(contract, "symbol", "") or "")
             if not symbol:
                 continue
+            con_id = _safe_int(getattr(contract, "conId", 0) if contract is not None else 0, 0)
+            if con_id > 0 and contract is not None and not names_by_con_id.get(con_id):
+                try:
+                    details = ib.reqContractDetails(contract) or []
+                except Exception:
+                    details = []
+                if details:
+                    detail = details[0]
+                    long_name = str(
+                        getattr(detail, "longName", "")
+                        or getattr(detail, "marketName", "")
+                        or ""
+                    ).strip()
+                    if long_name:
+                        names_by_con_id[con_id] = long_name
             exec_account = str(getattr(execution, "acctNumber", "") or "")
             if account and exec_account and exec_account != account:
                 continue
@@ -661,6 +736,12 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                     "time": ts,
                     "account": exec_account,
                     "symbol": symbol,
+                    "name": _clean_symbol_name(
+                        names_by_con_id.get(con_id, "")
+                        or names_by_symbol.get(symbol.upper(), "")
+                        or (getattr(contract, "description", "") if contract is not None else ""),
+                        symbol,
+                    ),
                     "side": str(getattr(execution, "side", "") or ""),
                     "shares": _safe_float(getattr(execution, "shares", 0.0), 0.0),
                     "price": _safe_float(getattr(execution, "price", 0.0), 0.0),
@@ -670,8 +751,11 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                     "commission": commission,
                     "commission_currency": str(getattr(report, "currency", "") or "") if report is not None else "",
                     "realized_pnl": _safe_float_or_none(getattr(report, "realizedPNL", None) if report is not None else None),
+                    "_con_id": con_id,
                 }
             )
+        for ex in executions:
+            ex.pop("_con_id", None)
         executions.sort(key=lambda r: str(r.get("time", "")), reverse=True)
         executions = executions[:100]
 

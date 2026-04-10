@@ -498,6 +498,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
       padding: 8px 10px;
       background: #f8fbfd;
       border-bottom: 1px solid #e3e9ee;
@@ -512,6 +513,43 @@
       font-size: 0.8rem;
       background: #ffffff;
       color: #173749;
+    }
+
+    .tx-window {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+      min-width: 260px;
+    }
+
+    .tx-window input[type="range"] {
+      width: 180px;
+    }
+
+    .tx-window-label {
+      color: #4a6473;
+      min-width: 92px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tx-ai-box {
+      margin: 4px 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #d9e3ea;
+      background: #f7fbff;
+      color: #2a4658;
+      font-size: 0.8rem;
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
+
+    .tx-ai-btn {
+      padding: 4px 7px;
+      font-size: 0.74rem;
+      border-radius: 7px;
     }
 
     .tx-source {
@@ -744,22 +782,29 @@
                 <option value="entries">Entrées</option>
                 <option value="exits">Sorties</option>
               </select>
+              <div class="tx-window">
+                <label for="tx-window-slider">Parcourir</label>
+                <input id="tx-window-slider" type="range" min="0" max="0" step="1" value="0">
+                <span class="tx-window-label" id="tx-window-label">0 / 0</span>
+              </div>
             </div>
             <table>
               <thead>
                 <tr>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="timestamp">Date</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="source">Source</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="name">Nom</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="ticker">Symbole</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="side">Action</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="quantity">Quantite</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="price">Prix</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="reason">Raison</th>
                   <th class="sortable" data-sort-table="transactions" data-sort-key="realized_pnl">P/L realise</th>
+                  <th>IA</th>
                 </tr>
               </thead>
               <tbody id="ibkr-exec-body">
-                <tr><td colspan="8">Chargement...</td></tr>
+                <tr><td colspan="10">Chargement...</td></tr>
               </tbody>
             </table>
           </div>
@@ -837,10 +882,14 @@
     const portfolioPosBodyEl = document.getElementById("portfolio-pos-body");
     const ibkrExecBodyEl = document.getElementById("ibkr-exec-body");
     const txFilterEl = document.getElementById("tx-filter");
+    const txWindowSliderEl = document.getElementById("tx-window-slider");
+    const txWindowLabelEl = document.getElementById("tx-window-label");
     const llmHealthMetaEl = document.getElementById("llm-health-meta");
     const llmHealthBodyEl = document.getElementById("llm-health-body");
     let lastPortfolioRefreshEpoch = 0;
     const PORTFOLIO_AUTO_REFRESH_MS = 60000;
+    const TX_WINDOW_SIZE = 50;
+    let txWindowStart = 0;
     let latestPositionRows = [];
     let latestTxRows = [];
     let latestTxCurrency = "USD";
@@ -983,6 +1032,32 @@
       return `<span class="tx-source ibkr">IBKR</span>`;
     }
 
+    function formatTxLlmSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") return "";
+      const decision = String(snapshot.decision || "n/a");
+      const score = asNumber(snapshot.score, NaN);
+      const confidence = asNumber(snapshot.confidence, NaN);
+      const model = String(snapshot.llm_model || "").trim() || "n/a";
+      const status = String(snapshot.llm_status || "").trim() || "n/a";
+      const error = String(snapshot.llm_error || "").trim();
+      const reasons = Array.isArray(snapshot.reasons) ? snapshot.reasons : [];
+      const warnings = Array.isArray(snapshot.warnings) ? snapshot.warnings : [];
+
+      const lines = [];
+      lines.push(`Decision: ${decision} | Score: ${Number.isFinite(score) ? score.toFixed(1) : "n/a"} | Confiance: ${Number.isFinite(confidence) ? confidence.toFixed(0) + "%" : "n/a"}`);
+      lines.push(`Modele: ${model} | Statut LLM: ${status}`);
+      if (error) lines.push(`Erreur LLM: ${error}`);
+      if (reasons.length) {
+        lines.push("Signaux:");
+        for (const reason of reasons.slice(0, 4)) lines.push(`- ${String(reason)}`);
+      }
+      if (warnings.length) {
+        lines.push("Risques:");
+        for (const warning of warnings.slice(0, 4)) lines.push(`- ${String(warning)}`);
+      }
+      return lines.join("\n");
+    }
+
     function toSortableNumber(value) {
       if (typeof value === "number") {
         return Number.isFinite(value) ? value : null;
@@ -1043,6 +1118,7 @@
       if (tableName === "positions") {
         renderPositions();
       } else if (tableName === "transactions") {
+        txWindowStart = 0;
         renderTransactions();
       }
     }
@@ -1081,31 +1157,81 @@
         latestTxRows.filter(row => txFilterMatch(row, mode)),
         "transactions"
       );
+      const total = rows.length;
+      const maxStart = Math.max(0, total - TX_WINDOW_SIZE);
+      txWindowStart = Math.max(0, Math.min(txWindowStart, maxStart));
+
+      if (txWindowSliderEl) {
+        txWindowSliderEl.min = "0";
+        txWindowSliderEl.max = String(maxStart);
+        txWindowSliderEl.step = "1";
+        txWindowSliderEl.value = String(txWindowStart);
+        txWindowSliderEl.disabled = total <= TX_WINDOW_SIZE;
+      }
+      if (txWindowLabelEl) {
+        if (!total) {
+          txWindowLabelEl.textContent = "0 / 0";
+        } else {
+          const start = txWindowStart + 1;
+          const end = Math.min(total, txWindowStart + TX_WINDOW_SIZE);
+          txWindowLabelEl.textContent = `${start}-${end} / ${total}`;
+        }
+      }
+
       if (!rows.length) {
-        ibkrExecBodyEl.innerHTML = "<tr><td colspan='8'>Aucune transaction pour ce filtre.</td></tr>";
+        ibkrExecBodyEl.innerHTML = "<tr><td colspan='10'>Aucune transaction pour ce filtre.</td></tr>";
         return;
       }
-      ibkrExecBodyEl.innerHTML = rows.slice(0, 150).map(tx => {
+      const visibleRows = rows.slice(txWindowStart, txWindowStart + TX_WINDOW_SIZE);
+      ibkrExecBodyEl.innerHTML = visibleRows.map((tx, idx) => {
         const qty = Math.abs(asNumber(tx.quantity, 0));
         const px = maybeNumber(tx.price);
         const realized = maybeNumber(tx.realized_pnl);
         const reason = String(tx.reason || "") || "-";
+        const name = String(tx.name || tx.ticker || "").trim() || "n/a";
+        const llmSnapshot = (tx.llm_snapshot && typeof tx.llm_snapshot === "object") ? tx.llm_snapshot : null;
+        const rowId = `tx-ai-${txWindowStart + idx}`;
+        const aiCell = llmSnapshot
+          ? `<button class="btn-soft tx-ai-btn" type="button" data-target="${rowId}">Voir</button>`
+          : "<span style='color:#8aa0af;'>-</span>";
         const pnlCell = Number.isFinite(realized)
           ? `<span class="${pnlClass(realized)}">${fmtSignedMoney(realized, latestTxCurrency)}</span>`
           : "-";
+        const detailRow = llmSnapshot
+          ? `
+            <tr id="${rowId}" class="hidden">
+              <td colspan="10"><div class="tx-ai-box">${escapeHtml(formatTxLlmSnapshot(llmSnapshot))}</div></td>
+            </tr>
+          `
+          : "";
         return `
           <tr>
             <td>${escapeHtml(tx.timestamp || "")}</td>
             <td>${txSourceBadge(String(tx.source || ""))}</td>
+            <td>${escapeHtml(name)}</td>
             <td>${escapeHtml(tx.ticker || "")}</td>
             <td>${escapeHtml(normalizeSide(tx.side || ""))}</td>
             <td>${qty.toFixed(0)}</td>
             <td>${Number.isFinite(px) ? px.toFixed(4) : "n/a"}</td>
             <td>${escapeHtml(reason)}</td>
             <td>${pnlCell}</td>
+            <td>${aiCell}</td>
           </tr>
+          ${detailRow}
         `;
       }).join("");
+
+      document.querySelectorAll(".tx-ai-btn[data-target]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const targetId = String(btn.getAttribute("data-target") || "");
+          if (!targetId) return;
+          const rowEl = document.getElementById(targetId);
+          if (!rowEl) return;
+          const isHidden = rowEl.classList.contains("hidden");
+          rowEl.classList.toggle("hidden", !isHidden);
+          btn.textContent = isHidden ? "Masquer" : "Voir";
+        });
+      });
     }
 
     function connectivityBadgeLabel(state) {
@@ -1336,6 +1462,7 @@
         }
         if (!positions.length && paperPositions.length) {
           positions = paperPositions.map(p => ({
+            name: p.name,
             symbol: p.ticker,
             quantity: p.shares,
             avg_cost: p.entry_price,
@@ -1355,7 +1482,7 @@
           const marketValue = maybeNumber(pos.market_value);
           const marketPrice = maybeNumber(pos.market_price);
           const unrealized = maybeNumber(pos.unrealized_pnl);
-          const displayName = symbol || "n/a";
+          const displayName = String(pos.name || paperPos.name || symbol || "n/a");
           const valueFallback = (Number.isFinite(marketPrice) && marketPrice > 0)
             ? marketPrice * qty
             : (Number.isFinite(avgCost) ? avgCost * qty : NaN);
@@ -1382,12 +1509,14 @@
         const buboRows = (Array.isArray(paper.transactions) ? paper.transactions : []).map(tx => ({
           source: "bubo",
           timestamp: tx.timestamp,
+          name: tx.name,
           ticker: tx.ticker,
           side: tx.side,
           quantity: tx.quantity,
           price: tx.price,
           reason: tx.reason,
           realized_pnl: tx.realized_pnl,
+          llm_snapshot: tx.llm_snapshot,
           event: tx.event
         }));
 
@@ -1401,6 +1530,7 @@
           ? ibkr.executions.map(ex => ({
               source: "ibkr",
               timestamp: ex.time,
+              name: ex.name,
               ticker: ex.symbol,
               side: ex.side,
               quantity: ex.shares,
@@ -1499,7 +1629,16 @@
     refreshSortHeaders("positions");
     refreshSortHeaders("transactions");
     if (txFilterEl) {
-      txFilterEl.addEventListener("change", () => renderTransactions());
+      txFilterEl.addEventListener("change", () => {
+        txWindowStart = 0;
+        renderTransactions();
+      });
+    }
+    if (txWindowSliderEl) {
+      txWindowSliderEl.addEventListener("input", () => {
+        txWindowStart = Math.max(0, parseInt(String(txWindowSliderEl.value || "0"), 10) || 0);
+        renderTransactions();
+      });
     }
     document.getElementById("btn-settings-toggle").addEventListener("click", () => {
       settingsPanelEl.classList.toggle("hidden");
