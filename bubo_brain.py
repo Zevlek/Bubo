@@ -127,6 +127,7 @@ RÈGLES DE DÉCISION:
 - Tu cherches la CONVERGENCE des signaux (technique + sentiment + social pointent dans la même direction)
 - Les divergences (ex: technique bullish mais news bearish) = prudence, tu restes HOLD
 - En période de blackout (earnings/Fed/BCE dans <2 jours) = TOUJOURS HOLD, quelle que soit la force des signaux
+- Tu dois intégrer les coûts d'exécution (frais + slippage). Si l'edge attendu est inférieur aux coûts aller-retour + marge de sécurité, tu restes HOLD
 - Position sizing: plus la convergence est forte et la confiance haute, plus la position est grosse
 - Stop loss: 2%, Take profit: 10% (ratio risque/reward 1:5)
 - Capital: 10 000€, max 25% par position, max 3 positions simultanées
@@ -187,7 +188,7 @@ def load_gemini_key() -> str:
 class DataCollector:
     """Collecte toutes les données brutes des 4 phases."""
 
-    def __init__(self, use_finbert: bool = True):
+    def __init__(self, use_finbert: bool = True, runtime_context: dict | None = None):
         self.use_finbert = use_finbert
         self.tech_config = None
         self.fetcher = None
@@ -198,6 +199,7 @@ class DataCollector:
         self.news_fetcher = None
         self.sentiment_engine = None
         self.social_pipeline = None
+        self.runtime_context = dict(runtime_context or {})
 
         if MODULES["phase1"]:
             self.tech_config = TradingConfig()
@@ -232,10 +234,14 @@ class DataCollector:
                 print(f"  ⚠️  Social: {e}")
                 MODULES["phase3b"] = False
 
+    def set_runtime_context(self, context: dict | None):
+        self.runtime_context = dict(context or {})
+
     def collect(self, ticker: str) -> dict:
         data = {"ticker": ticker, "name": WATCHLIST.get(ticker, ticker),
                 "collected_at": datetime.now().isoformat(),
-                "technical": {}, "news": {}, "social": {}, "events": {}}
+                "technical": {}, "news": {}, "social": {}, "events": {},
+                "constraints": dict(self.runtime_context)}
 
         if MODULES["phase1"]:
             try:
@@ -560,6 +566,34 @@ class GeminiBrain:
         name = data["name"]
         parts = [f"Analyse {ticker} ({name}) — {data['collected_at'][:16]}"]
 
+        constraints = data.get("constraints", {}) if isinstance(data, dict) else {}
+        if constraints and isinstance(constraints, dict):
+            def _to_float(value: object, default: float = 0.0) -> float:
+                try:
+                    return float(value)
+                except Exception:
+                    return default
+
+            fee_bps = _to_float(constraints.get("trade_fee_bps_per_side"), 0.0)
+            slippage_bps = _to_float(constraints.get("slippage_bps_per_side"), 0.0)
+            roundtrip_bps = _to_float(constraints.get("roundtrip_cost_bps"), 0.0)
+            max_pos = int(_to_float(constraints.get("max_open_positions"), 0.0))
+            max_position_pct = _to_float(constraints.get("max_position_pct"), 0.0)
+            max_expo = _to_float(constraints.get("max_total_exposure_pct"), 0.0)
+            capital = _to_float(constraints.get("managed_capital_eur", constraints.get("capital_eur")), 0.0)
+            allow_short = bool(constraints.get("allow_short"))
+            parts.append("\n═══ CONTRAINTES D'EXÉCUTION ═══")
+            parts.append(
+                "Frais/ordre: "
+                f"{fee_bps} bps | Slippage/ordre: {slippage_bps} bps | Coût A/R estimé: {roundtrip_bps} bps"
+            )
+            parts.append(
+                f"Capital géré: {capital}€ | Max positions: {max_pos} | "
+                f"Max position: {max_position_pct:.0%} | Exposition max: {max_expo:.0%}"
+            )
+            parts.append(f"Short autorisé: {bool(allow_short)}")
+            parts.append("Règle coût: BUY/SELL uniquement si edge net > coûts A/R + marge de sécurité.")
+
         # Technique
         tech = data.get("technical", {})
         if tech and "error" not in tech:
@@ -678,6 +712,52 @@ class GeminiBrain:
             return True
         return False
 
+    @staticmethod
+    def _extract_float(text: str, pattern: str) -> float | None:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fallback_parse_from_text(text: str, ticker: str) -> dict | None:
+        raw = str(text or "")
+        if not raw:
+            return None
+
+        decision = None
+        m_dec = re.search(r'"?decision"?\s*[:=]\s*"?(STRONG BUY|STRONG SELL|BUY|SELL|HOLD)"?', raw, flags=re.IGNORECASE)
+        if m_dec:
+            decision = m_dec.group(1).upper()
+        else:
+            m_dec_free = re.search(r"\b(STRONG BUY|STRONG SELL|BUY|SELL|HOLD)\b", raw, flags=re.IGNORECASE)
+            if m_dec_free:
+                decision = m_dec_free.group(1).upper()
+
+        score = GeminiBrain._extract_float(raw, r'"?score"?\s*[:=]\s*(-?\d+(?:\.\d+)?)')
+        confidence = GeminiBrain._extract_float(raw, r'"?(?:confidence|confiance)"?\s*[:=]\s*(-?\d+(?:\.\d+)?)')
+        position_pct = GeminiBrain._extract_float(raw, r'"?position_size_pct"?\s*[:=]\s*(-?\d+(?:\.\d+)?)')
+
+        if decision is None and score is None:
+            return None
+
+        payload = {
+            "ticker": ticker,
+            "decision": decision or "HOLD",
+            "score": 50.0 if score is None else score,
+            "confidence": 0.0 if confidence is None else confidence,
+            "position_size_pct": 0.0 if position_pct is None else position_pct,
+            "stop_loss": None,
+            "take_profit": None,
+            "raisonnement": "Réponse partielle récupérée",
+            "signaux_cles": [],
+            "risques": [],
+        }
+        return payload
+
     def _parse(self, text: str, ticker: str, model: str = "", finish_reason: str = "") -> dict:
         try:
             candidate = self._extract_json_block(text)
@@ -697,7 +777,16 @@ class GeminiBrain:
             return self._validate(result, ticker, status="ok", model=model)
 
         except json.JSONDecodeError as e:
-            print(f"    ⚠️  Parse échoué: {text[:200]}")
+            print(f"    [WARN] Parse echoue: {text[:200]}")
+            fallback = self._fallback_parse_from_text(text, ticker)
+            if fallback is not None:
+                return self._validate(
+                    fallback,
+                    ticker,
+                    status="ok_fallback",
+                    model=model,
+                    error="fallback_text_parse",
+                )
             snippet = str(text or "").replace("\n", " ").replace("\r", " ")
             status = "truncated" if self._looks_truncated(
                 candidate=snippet,
@@ -719,22 +808,34 @@ class GeminiBrain:
         """Normalise et valide un résultat."""
         required_keys = ("decision", "score", "confidence", "position_size_pct")
         missing = [k for k in required_keys if k not in result]
-        if missing:
+        critical_missing = [k for k in ("decision", "score") if k not in result]
+        if critical_missing:
             return self._default(
                 ticker,
                 status="incomplete_payload",
                 model=model,
-                error=f"Champs manquants: {', '.join(missing)}",
+                error=f"Champs manquants: {', '.join(critical_missing)}",
             )
 
         result.setdefault("ticker", ticker)
-        result.setdefault("decision", "HOLD")
         result.setdefault("score", 50)
         result.setdefault("confidence", 0)
         result.setdefault("position_size_pct", 0.0)
         result.setdefault("raisonnement", "")
         result.setdefault("signaux_cles", [])
         result.setdefault("risques", [])
+
+        if missing and not error:
+            error = f"Champs auto-completés: {', '.join(missing)}"
+            status = "ok_partial"
+
+        raw_decision = str(result.get("decision", "HOLD") or "HOLD").strip().upper().replace("_", " ")
+        if raw_decision not in ("BUY", "SELL", "HOLD", "STRONG BUY", "STRONG SELL"):
+            raw_decision = "HOLD"
+            if not error:
+                error = "decision invalide -> HOLD"
+            status = "ok_sanitized"
+        result["decision"] = raw_decision
 
         try:
             score = float(result["score"])
@@ -752,14 +853,6 @@ class GeminiBrain:
         result["score"] = max(0.0, min(100.0, score))
         result["confidence"] = max(0.0, min(100.0, confidence))
         result["position_size_pct"] = max(0.0, min(0.25, position_pct))
-
-        if result["decision"] not in ("BUY", "SELL", "HOLD", "STRONG BUY", "STRONG SELL"):
-            return self._default(
-                ticker,
-                status="invalid_decision",
-                model=model,
-                error=f"decision invalide: {result.get('decision')}",
-            )
 
         return self._attach_meta(result, ok=True, status=status, model=model, error=error)
 

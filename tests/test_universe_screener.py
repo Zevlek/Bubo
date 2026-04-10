@@ -98,6 +98,13 @@ class UniverseScreenerTests(unittest.TestCase):
             pd.DataFrame({"symbol": ["air.pa", "AM.PA", "AIR.PA"]}).to_csv(csv, index=False)
             self.assertEqual(load_universe(csv), ["AIR.PA", "AM.PA"])
 
+    def test_load_universe_strict_us_filters_non_equity_symbols(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            txt = base / "u.txt"
+            txt.write_text("AAPL\nUSD\nHOLX.CVR\nBRK.B\nMSFT\n", encoding="utf-8")
+            self.assertEqual(load_universe(txt, strict_us=True), ["AAPL", "BRK.B", "MSFT"])
+
 
 if __name__ == "__main__":
     unittest.main()

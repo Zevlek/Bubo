@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,10 +19,26 @@ QUOTAS = {"IVV": 500, "IJH": 300, "IJR": 200}
 TARGET_COUNT = 1000
 OUT_FILE = Path("data/universe_us_1000_v1.txt")
 OUT_META = Path("data/universe_us_1000_v1_meta.json")
+_VALID_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_BLOCKED_SYMBOLS = {"USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD", "CNH"}
 
 
 def _normalize_symbol(raw: object) -> str:
     return str(raw or "").replace("\ufeff", "").strip().upper()
+
+
+def _is_valid_symbol(symbol: str) -> bool:
+    if not symbol:
+        return False
+    if symbol in _BLOCKED_SYMBOLS:
+        return False
+    if symbol.endswith(("=X", ".CVR", ".WS", ".W", ".RT", ".WT", ".U", " WI")):
+        return False
+    if not _VALID_TICKER_RE.match(symbol):
+        return False
+    if "." in symbol and len(symbol.rsplit(".", 1)[-1]) > 2:
+        return False
+    return True
 
 
 def _load_holdings(url: str) -> pd.DataFrame:
@@ -49,6 +66,8 @@ def _extract_us_tickers(df: pd.DataFrame) -> list[str]:
     for raw in df["Ticker"].tolist():
         sym = _normalize_symbol(raw)
         if not sym or sym == "-":
+            continue
+        if not _is_valid_symbol(sym):
             continue
         if sym in seen:
             continue

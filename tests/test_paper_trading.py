@@ -124,6 +124,52 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertTrue(any("stop_loss" in a for a in summary["actions"]))
 
+    def test_rotation_skips_same_day_position_when_min_hold_active(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+            self.cfg.max_open_positions = 1
+            self.cfg.rotation_enabled = True
+            self.cfg.rotation_max_per_cycle = 1
+            self.cfg.rotation_min_edge = 0.0
+            self.cfg.rotation_min_hold_days = 1
+
+            # Open one long position.
+            open_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.50,
+                    "final_score": 60.0,
+                    "confidence": 60.0,
+                }
+            }
+            summary_open = self._run_cycle(open_signal, {"AAA": 100.0}, state_path)
+            self.assertEqual(summary_open["positions"], 1)
+
+            # Try to rotate on the same day to BBB.
+            rotate_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 55.0,
+                    "confidence": 55.0,
+                },
+                "BBB": {
+                    "ticker": "BBB",
+                    "decision": "BUY",
+                    "position_size_pct": 0.50,
+                    "final_score": 95.0,
+                    "confidence": 90.0,
+                },
+            }
+            summary_rotate = self._run_cycle(rotate_signal, {"AAA": 101.0, "BBB": 50.0}, state_path)
+            self.assertEqual(summary_rotate["positions"], 1)
+            self.assertFalse(any("rotation" in a for a in summary_rotate["actions"]))
+            persisted = load_paper_state(str(state_path), self.cfg)
+            self.assertIn("AAA", persisted["positions"])
+            self.assertNotIn("BBB", persisted["positions"])
+
     def test_short_entry_and_cover(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "paper_state.json"

@@ -84,6 +84,7 @@ L'univers 1000 est pense pour fonctionner avec l'entonnoir du moteur:
 - deep analysis `BUBO_MAX_DEEP`,
 - cadence watch `BUBO_WATCH_INTERVAL_MIN`,
 - budget gate API actif par defaut.
+- filtrage strict des symboles non actions US (`USD`, suffixes `.CVR`, etc.) avant analyse profonde.
 
 ## Exemples docker-compose (qui marchent)
 
@@ -139,6 +140,10 @@ services:
       BUBO_ROTATION_ENABLED: ${BUBO_ROTATION_ENABLED:-1}
       BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-12}
       BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-1}
+      BUBO_ROTATION_MIN_HOLD_DAYS: ${BUBO_ROTATION_MIN_HOLD_DAYS:-1}
+      BUBO_IBKR_ENTRY_CUTOFF_MIN: ${BUBO_IBKR_ENTRY_CUTOFF_MIN:-5}
+      BUBO_IBKR_ORDER_MAX_RETRIES: ${BUBO_IBKR_ORDER_MAX_RETRIES:-2}
+      BUBO_IBKR_FALLBACK_LIMIT_BPS: ${BUBO_IBKR_FALLBACK_LIMIT_BPS:-15}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
@@ -233,6 +238,10 @@ services:
       BUBO_ROTATION_ENABLED: ${BUBO_ROTATION_ENABLED:-1}
       BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-12}
       BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-1}
+      BUBO_ROTATION_MIN_HOLD_DAYS: ${BUBO_ROTATION_MIN_HOLD_DAYS:-1}
+      BUBO_IBKR_ENTRY_CUTOFF_MIN: ${BUBO_IBKR_ENTRY_CUTOFF_MIN:-5}
+      BUBO_IBKR_ORDER_MAX_RETRIES: ${BUBO_IBKR_ORDER_MAX_RETRIES:-2}
+      BUBO_IBKR_FALLBACK_LIMIT_BPS: ${BUBO_IBKR_FALLBACK_LIMIT_BPS:-15}
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
@@ -349,6 +358,10 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_ROTATION_ENABLED` | Autorise la rotation (fermer une position faible pour ouvrir une plus forte si portefeuille plein) | Non | `0` ou `1` | `1` |
 | `BUBO_ROTATION_MIN_EDGE` | Ecart minimal de force signal pour declencher une rotation | Non | Nombre `>= 0` (ex: `12`) | `12` |
 | `BUBO_ROTATION_MAX_PER_CYCLE` | Nombre maximum de rotations par cycle | Non | Entier `>= 0` | `1` |
+| `BUBO_ROTATION_MIN_HOLD_DAYS` | Bloque les sorties de rotation sur positions trop recentes (anti overtrading intraday) | Non | Entier `>= 0` | `1` |
+| `BUBO_IBKR_ENTRY_CUTOFF_MIN` | Bloque les nouvelles entrees IBKR a l'approche de la cloture US | Non | Entier `>= 0` (minutes) | `5` |
+| `BUBO_IBKR_ORDER_MAX_RETRIES` | Nombre d'essais max d'un ordre IBKR avant abandon | Non | Entier `>= 1` | `2` |
+| `BUBO_IBKR_FALLBACK_LIMIT_BPS` | Offset (bps) de l'ordre limite de secours apres echec market IBKR | Non | Nombre `>= 1` | `15` |
 | `IBG_TWS_USERID` | Login IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Identifiant IBKR | vide |
 | `IBG_TWS_PASSWORD` | Mot de passe IBKR pour service `ib-gateway` | Oui si profile `ibkr` | Mot de passe IBKR | vide |
 | `IBG_TRADING_MODE` | Mode IB Gateway | Non | `paper`, `live`, `both` | `paper` |
@@ -380,6 +393,7 @@ Notes compatibilite:
 - Au demarrage, le log affiche les modeles Gemini utilises et `max_output_tokens`.
 - Si tu vois beaucoup de `llm_error=parse_failed`/`truncated`, commence par monter `BUBO_GEMINI_MAX_OUTPUT_TOKENS` (>= `256`, recommande `700`).
 - Si tu vois `finish_reason=MAX_TOKENS` malgre une valeur elevee, laisse `BUBO_GEMINI_THINKING_BUDGET=0` pour prioriser la sortie JSON.
+- Le prompt Gemini inclut les frais/slippage (`trade_fee_bps`, `slippage_bps`, coût aller-retour) pour que la decision tienne compte du coût d'execution net.
 
 ## Test paper trading IBKR
 

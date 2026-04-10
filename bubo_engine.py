@@ -88,12 +88,14 @@ try:
         ScreenerConfig,
         APIBudgetManager,
         APIBudgetConfig,
+        is_valid_us_equity_ticker,
         load_universe,
     )
     MODULES["screener"] = True
 except ImportError as e:
     MODULES["screener"] = False
     print(f"  ⚠️  Screener non disponible: {e}")
+    is_valid_us_equity_ticker = None  # type: ignore[assignment]
 
 
 WATCHLIST = {
@@ -139,6 +141,7 @@ class EngineConfig:
     rotation_enabled: bool = True
     rotation_min_edge: float = 12.0
     rotation_max_per_cycle: int = 1
+    rotation_min_hold_days: int = 1
 
     # Backtest
     backtest_period_years: int = 2
@@ -155,6 +158,9 @@ class EngineConfig:
     ibkr_currency: str = "USD"
     ibkr_capital_limit: float = 10000.0
     ibkr_existing_positions_policy: str = "include"  # include | ignore
+    ibkr_entry_cutoff_min: int = 5
+    ibkr_order_max_retries: int = 2
+    ibkr_fallback_limit_bps: float = 15.0
 
 
 def get_adaptive_weights(cfg: EngineConfig) -> dict:
@@ -179,6 +185,23 @@ def _normalize_decision_engine(value: str) -> str:
 def _normalize_ibkr_existing_positions_policy(value: str) -> str:
     policy = str(value or "include").strip().lower()
     return policy if policy in {"include", "ignore"} else "include"
+
+
+def _is_strategy_ticker(symbol: object) -> bool:
+    checker = globals().get("is_valid_us_equity_ticker")
+    if callable(checker):
+        try:
+            return bool(checker(symbol))
+        except Exception:
+            pass
+    raw = str(symbol or "").strip().upper()
+    if not raw:
+        return False
+    if raw in {"USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD", "CNH"}:
+        return False
+    if raw.endswith((".CVR", ".WS", ".W", ".RT", ".WT", ".U", "=X")):
+        return False
+    return True
 
 
 # ─────────────────────────────────────────────
@@ -247,6 +270,21 @@ class ScoringEngine:
         # Recalculate weights after potential module failures
         self.weights = get_adaptive_weights(cfg)
 
+    def _llm_runtime_context(self) -> dict:
+        roundtrip_cost_bps = float((self.cfg.trade_fee_bps + self.cfg.slippage_bps) * 2.0)
+        return {
+            "capital_eur": float(self.cfg.initial_capital),
+            "managed_capital_eur": float(self.cfg.ibkr_capital_limit),
+            "trade_fee_bps_per_side": float(self.cfg.trade_fee_bps),
+            "slippage_bps_per_side": float(self.cfg.slippage_bps),
+            "roundtrip_cost_bps": roundtrip_cost_bps,
+            "max_position_pct": float(self.cfg.max_position_pct),
+            "max_open_positions": int(self.cfg.max_open_positions),
+            "max_total_exposure_pct": float(self.cfg.max_total_exposure_pct),
+            "allow_short": bool(self.cfg.allow_short),
+            "paper_broker": str(self.cfg.paper_broker),
+        }
+
     def _init_llm_engine(self):
         try:
             from bubo_brain import DataCollector, GeminiBrain, load_gemini_key
@@ -268,7 +306,10 @@ class ScoringEngine:
             return
 
         try:
-            collector = DataCollector(use_finbert=self.cfg.use_finbert)
+            collector = DataCollector(
+                use_finbert=self.cfg.use_finbert,
+                runtime_context=self._llm_runtime_context(),
+            )
             collector.init_events(self.cfg.tickers)
             if self.cfg.use_finbert:
                 collector.init_sentiment()
@@ -328,6 +369,12 @@ class ScoringEngine:
     def _score_llm(self, ticker: str) -> dict:
         if not self.llm_ready or self.llm_collector is None or self.llm_brain is None:
             raise RuntimeError("LLM engine not ready")
+
+        if hasattr(self.llm_collector, "set_runtime_context"):
+            try:
+                self.llm_collector.set_runtime_context(self._llm_runtime_context())
+            except Exception:
+                pass
 
         data = self.llm_collector.collect(ticker)
         llm = self.llm_brain.analyze(data, dry_run=False)
@@ -1272,6 +1319,8 @@ def _paper_state_open_tickers(state_path: str, cfg: EngineConfig) -> list[str]:
         tk = str(ticker or "").strip().upper()
         if not tk or tk in seen:
             continue
+        if not _is_strategy_ticker(tk):
+            continue
         try:
             shares = int(pos.get("shares", 0) or 0)
         except Exception:
@@ -1289,6 +1338,8 @@ def _merge_unique_tickers(primary: list[str], secondary: list[str]) -> list[str]
     for raw in list(primary or []) + list(secondary or []):
         tk = str(raw or "").strip().upper()
         if not tk or tk in seen:
+            continue
+        if not _is_strategy_ticker(tk):
             continue
         seen.add(tk)
         merged.append(tk)
@@ -1741,6 +1792,32 @@ def log_cycle_outputs(results: dict,
 
     if summary:
         order_events = list(summary.get("order_events", []) or [])
+
+        def _order_event_key(event: dict) -> tuple:
+            return (
+                str(event.get("broker", "")),
+                str(event.get("side", "")),
+                str(event.get("ticker", "")),
+                str(event.get("status", "")),
+                str(event.get("reason", "")),
+                str(event.get("quantity", "")),
+                str(event.get("filled_shares", "")),
+                str(event.get("price", "")),
+                str(event.get("commission", "")),
+            )
+
+        seen_order_keys: set[tuple] = set()
+        deduped_order_events: list[dict] = []
+        for ev in order_events:
+            if not isinstance(ev, dict):
+                continue
+            k = _order_event_key(ev)
+            if k in seen_order_keys:
+                continue
+            seen_order_keys.add(k)
+            deduped_order_events.append(ev)
+        order_events = deduped_order_events
+
         if not order_events:
             for action in summary.get("actions", []) or []:
                 tokens = str(action).split()
@@ -1755,19 +1832,26 @@ def log_cycle_outputs(results: dict,
                     qty_int = 0
                 if side not in {"BUY", "SELL"}:
                     continue
-                order_events.append(
-                    {
-                        "broker": summary.get("paper_broker", "local"),
-                        "side": side,
-                        "ticker": ticker,
-                        "quantity": qty_int,
-                        "status": "filled",
-                        "reason": "",
-                    }
-                )
+                ev = {
+                    "broker": summary.get("paper_broker", "local"),
+                    "side": side,
+                    "ticker": ticker,
+                    "quantity": qty_int,
+                    "status": "filled",
+                    "reason": "",
+                }
+                k = _order_event_key(ev)
+                if k in seen_order_keys:
+                    continue
+                seen_order_keys.add(k)
+                order_events.append(ev)
         for warning in summary.get("warnings", []) or []:
             parsed = _extract_ibkr_warning_event(str(warning))
             if parsed is not None:
+                k = _order_event_key(parsed)
+                if k in seen_order_keys:
+                    continue
+                seen_order_keys.add(k)
                 order_events.append(parsed)
 
         for event in order_events:
@@ -1840,12 +1924,20 @@ class IBKRPaperAdapter:
                 pass
             self._ib = None
 
-    def place_market_order(self, ticker: str, side: str, quantity: int) -> dict:
+    def place_market_order(
+        self,
+        ticker: str,
+        side: str,
+        quantity: int,
+        reference_price: float | None = None,
+        max_retries: int | None = None,
+        fallback_limit_bps: float | None = None,
+    ) -> dict:
         if quantity <= 0:
             return {"ok": False, "reason": "invalid quantity"}
 
         try:
-            from ib_insync import Stock, MarketOrder  # type: ignore
+            from ib_insync import LimitOrder, MarketOrder, Stock  # type: ignore
         except Exception as e:
             return {"ok": False, "reason": f"ib_insync missing: {e}"}
 
@@ -1860,43 +1952,101 @@ class IBKRPaperAdapter:
                 currency=self.cfg.ibkr_currency,
             )
             ib.qualifyContracts(contract)
-            order = MarketOrder("BUY" if side.upper() == "BUY" else "SELL", int(quantity))
-            if self.cfg.ibkr_account:
-                order.account = self.cfg.ibkr_account
-            trade = ib.placeOrder(contract, order)
-            # Wait a bit for fill updates in paper account.
-            for _ in range(20):
-                ib.sleep(0.25)
-                if trade.isDone():
-                    break
+            order_side = "BUY" if side.upper() == "BUY" else "SELL"
+            retries = int(max_retries if max_retries is not None else getattr(self.cfg, "ibkr_order_max_retries", 2))
+            retries = max(1, min(5, retries))
+            fallback_bps = float(
+                fallback_limit_bps
+                if fallback_limit_bps is not None
+                else getattr(self.cfg, "ibkr_fallback_limit_bps", 15.0)
+            )
+            fallback_bps = max(1.0, min(200.0, fallback_bps))
 
-            filled = int(getattr(trade.orderStatus, "filled", 0) or 0)
-            avg_fill = float(getattr(trade.orderStatus, "avgFillPrice", 0.0) or 0.0)
-            status = str(getattr(trade.orderStatus, "status", "") or "")
+            def _finalize(trade) -> dict:
+                filled = int(getattr(trade.orderStatus, "filled", 0) or 0)
+                avg_fill = float(getattr(trade.orderStatus, "avgFillPrice", 0.0) or 0.0)
+                status = str(getattr(trade.orderStatus, "status", "") or "")
 
-            commission = 0.0
-            for fill in getattr(trade, "fills", []) or []:
-                rep = getattr(fill, "commissionReport", None)
-                if rep is not None:
+                commission = 0.0
+                for fill in getattr(trade, "fills", []) or []:
+                    rep = getattr(fill, "commissionReport", None)
+                    if rep is not None:
+                        try:
+                            commission += float(getattr(rep, "commission", 0.0) or 0.0)
+                        except Exception:
+                            pass
+
+                payload = {
+                    "ok": bool(filled > 0 and avg_fill > 0),
+                    "status": status,
+                    "filled": int(max(0, filled)),
+                    "avg_fill_price": float(max(0.0, avg_fill)),
+                    "commission": float(max(0.0, commission)),
+                }
+                if not payload["ok"]:
+                    payload["reason"] = f"not filled (status={status})"
+                return payload
+
+            def _submit(order_obj) -> dict:
+                if self.cfg.ibkr_account:
+                    order_obj.account = self.cfg.ibkr_account
+                try:
+                    order_obj.tif = "DAY"
+                except Exception:
+                    pass
+                trade = ib.placeOrder(contract, order_obj)
+                for _ in range(24):
+                    ib.sleep(0.25)
+                    if trade.isDone():
+                        break
+                out = _finalize(trade)
+                if not out.get("ok"):
                     try:
-                        commission += float(getattr(rep, "commission", 0.0) or 0.0)
+                        if not trade.isDone():
+                            ib.cancelOrder(trade.order)
+                            ib.sleep(0.2)
                     except Exception:
                         pass
+                return out
 
-            if filled <= 0 or avg_fill <= 0:
-                return {
-                    "ok": False,
-                    "reason": f"not filled (status={status})",
-                    "status": status,
-                }
+            statuses: list[str] = []
+            for attempt in range(retries):
+                market_order = MarketOrder(order_side, int(quantity))
+                out = _submit(market_order)
+                out["method"] = "market"
+                out["attempt"] = attempt + 1
+                if out.get("ok"):
+                    return out
+                status = str(out.get("status", "") or "")
+                statuses.append(status)
+                if status.upper() not in {"CANCELLED", "INACTIVE", "PRESUBMITTED"}:
+                    return out
+                ib.sleep(0.35 * (attempt + 1))
 
-            return {
-                "ok": True,
-                "status": status or "Filled",
-                "filled": filled,
-                "avg_fill_price": avg_fill,
-                "commission": float(max(0.0, commission)),
-            }
+            if reference_price is not None and float(reference_price) > 0:
+                px = float(reference_price)
+                if order_side == "BUY":
+                    limit_price = px * (1.0 + fallback_bps / 10_000.0)
+                else:
+                    limit_price = px * (1.0 - fallback_bps / 10_000.0)
+                limit_price = max(0.01, round(limit_price, 4))
+                limit_order = LimitOrder(order_side, int(quantity), limit_price)
+                try:
+                    limit_order.outsideRth = False
+                except Exception:
+                    pass
+                out = _submit(limit_order)
+                out["method"] = "limit_fallback"
+                out["limit_price"] = limit_price
+                if out.get("ok"):
+                    return out
+                statuses.append(str(out.get("status", "") or ""))
+
+            last_status = statuses[-1] if statuses else ""
+            reason = f"not filled (status={last_status})" if last_status else "not filled"
+            if len(statuses) > 1:
+                reason += f"; attempts={len(statuses)}"
+            return {"ok": False, "reason": reason, "status": last_status}
         except Exception as e:
             return {"ok": False, "reason": str(e)}
 
@@ -2067,6 +2217,13 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     def _is_short(pos_row: dict[str, Any]) -> bool:
         return _signed_shares(pos_row) < 0
 
+    def _holding_days(pos_row: dict[str, Any]) -> int:
+        try:
+            entry_day = date.fromisoformat(str(pos_row.get("entry_date", "") or ""))
+            return max(0, (date.today() - entry_day).days)
+        except Exception:
+            return 0
+
     def _candidate_strength(side: str, row: dict[str, Any]) -> float:
         score = float(row.get("final_score", 50.0) or 50.0)
         conf = float(row.get("confidence", 0.0) or 0.0)
@@ -2127,7 +2284,14 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         if broker == "ibkr":
             if ibkr is None or ibkr_trading_disabled:
                 return False
-            order_res = ibkr.place_market_order(ticker, order_side, int(qty))
+            order_res = ibkr.place_market_order(
+                ticker,
+                order_side,
+                int(qty),
+                reference_price=float(px),
+                max_retries=int(getattr(cfg, "ibkr_order_max_retries", 2) or 2),
+                fallback_limit_bps=float(getattr(cfg, "ibkr_fallback_limit_bps", 15.0) or 15.0),
+            )
             if not order_res.get("ok"):
                 reason = str(order_res.get("reason", "unknown"))
                 warnings_list.append(f"IBKR {order_side} {ticker} skipped: {reason}")
@@ -2247,6 +2411,21 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             total += abs(_signed_shares(pos)) * px
         return total
 
+    ibkr_entry_block_reason = ""
+    if broker == "ibkr":
+        market_clock = get_us_market_clock()
+        cutoff_s = max(0, int(float(getattr(cfg, "ibkr_entry_cutoff_min", 5) or 0) * 60))
+        if not bool(market_clock.get("is_open")):
+            ibkr_entry_block_reason = "market closed"
+        else:
+            seconds_to_close = market_clock.get("seconds_to_close")
+            if isinstance(seconds_to_close, int) and seconds_to_close <= cutoff_s:
+                ibkr_entry_block_reason = (
+                    f"entry cutoff active ({max(0, seconds_to_close)}s to close <= {cutoff_s}s)"
+                )
+        if ibkr_entry_block_reason:
+            warnings_list.append(f"IBKR entry gate: {ibkr_entry_block_reason}")
+
     # Entry logic after exits.
     candidate_rows = []
     for row in (results or {}).values():
@@ -2297,6 +2476,15 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             if edge < float(cfg.rotation_min_edge):
                 continue
 
+            weakest_pos = positions.get(weakest_ticker, {})
+            hold_days = _holding_days(weakest_pos if isinstance(weakest_pos, dict) else {})
+            min_hold_days = max(0, int(getattr(cfg, "rotation_min_hold_days", 1) or 0))
+            if hold_days < min_hold_days:
+                warnings_list.append(
+                    f"Rotation skip: {weakest_ticker} held {hold_days}d < min {min_hold_days}d"
+                )
+                continue
+
             if not _close_position(weakest_ticker, "rotation"):
                 continue
             rotation_count += 1
@@ -2308,6 +2496,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
         px = prices.get(ticker)
         if px is None or px <= 0:
+            continue
+        if broker == "ibkr" and ibkr_entry_block_reason:
             continue
 
         eq_before = float(managed_capital) if broker == "ibkr" else (float(state["cash"]) + positions_market_value())
@@ -2347,7 +2537,14 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             if ibkr is None or ibkr_trading_disabled:
                 continue
             order_side = "SELL" if is_short_entry else "BUY"
-            order_res = ibkr.place_market_order(ticker, order_side, int(shares))
+            order_res = ibkr.place_market_order(
+                ticker,
+                order_side,
+                int(shares),
+                reference_price=float(px),
+                max_retries=int(getattr(cfg, "ibkr_order_max_retries", 2) or 2),
+                fallback_limit_bps=float(getattr(cfg, "ibkr_fallback_limit_bps", 15.0) or 15.0),
+            )
             if not order_res.get("ok"):
                 reason = str(order_res.get("reason", "unknown"))
                 warnings_list.append(
@@ -2569,12 +2766,26 @@ def build_deep_analysis_list(cfg: EngineConfig,
     """
     Prescreen broad universe and keep a shortlist for deep analysis.
     """
+    universe_clean = []
+    invalid_count = 0
+    seen = set()
+    for raw in list(universe or []):
+        tk = str(raw or "").strip().upper()
+        if not tk or tk in seen:
+            continue
+        seen.add(tk)
+        if not _is_strategy_ticker(tk):
+            invalid_count += 1
+            continue
+        universe_clean.append(tk)
+
     if not MODULES.get("screener"):
-        shortlist = list(universe)[:max(1, max_deep)]
+        shortlist = list(universe_clean)[:max(1, max_deep)]
         return shortlist, pd.DataFrame({"ticker": shortlist}), {
             "warning": "screener unavailable",
             "requested": max_deep,
             "allowed": len(shortlist),
+            "invalid_filtered": invalid_count,
         }
 
     screener = UniverseScreener(
@@ -2583,9 +2794,9 @@ def build_deep_analysis_list(cfg: EngineConfig,
             top_n=max(1, preselect_top),
         )
     )
-    ranked = screener.screen(universe, top_n=max(1, preselect_top))
+    ranked = screener.screen(universe_clean, top_n=max(1, preselect_top))
     if ranked.empty:
-        return [], ranked, {"requested": max_deep, "allowed": 0}
+        return [], ranked, {"requested": max_deep, "allowed": 0, "invalid_filtered": invalid_count}
 
     if use_budget_gate:
         budget = APIBudgetManager(
@@ -2599,9 +2810,12 @@ def build_deep_analysis_list(cfg: EngineConfig,
             "allowed": len(selected),
             "dropped": max(0, len(ranked) - len(selected)),
             "budget_cap": len(selected),
+            "invalid_filtered": invalid_count,
         }
 
     tickers = selected["ticker"].astype(str).tolist() if not selected.empty else []
+    if "invalid_filtered" not in meta:
+        meta["invalid_filtered"] = invalid_count
     return tickers, selected, meta
 
 
@@ -2698,6 +2912,30 @@ def main():
         default=int(os.getenv("BUBO_ROTATION_MAX_PER_CYCLE", "1")),
         help="Nombre maximal de rotations autorisees par cycle.",
     )
+    parser.add_argument(
+        "--rotation-min-hold-days",
+        type=int,
+        default=int(os.getenv("BUBO_ROTATION_MIN_HOLD_DAYS", "1")),
+        help="Nombre minimal de jours de detention avant de pouvoir sortir une position par rotation.",
+    )
+    parser.add_argument(
+        "--ibkr-entry-cutoff-min",
+        type=int,
+        default=int(os.getenv("BUBO_IBKR_ENTRY_CUTOFF_MIN", "5")),
+        help="Bloque les nouvelles entrees IBKR a moins de N minutes de la cloture US.",
+    )
+    parser.add_argument(
+        "--ibkr-order-max-retries",
+        type=int,
+        default=int(os.getenv("BUBO_IBKR_ORDER_MAX_RETRIES", "2")),
+        help="Nombre d'essais max par ordre IBKR avant abandon.",
+    )
+    parser.add_argument(
+        "--ibkr-fallback-limit-bps",
+        type=float,
+        default=float(os.getenv("BUBO_IBKR_FALLBACK_LIMIT_BPS", "15")),
+        help="Offset (bps) pour l'ordre limite de secours apres echec market IBKR.",
+    )
     args = parser.parse_args()
     paper_state_path = args.paper_state
 
@@ -2738,6 +2976,10 @@ def main():
     cfg.rotation_enabled = bool(args.rotation_enabled)
     cfg.rotation_min_edge = max(0.0, float(args.rotation_min_edge))
     cfg.rotation_max_per_cycle = max(0, int(args.rotation_max_per_cycle))
+    cfg.rotation_min_hold_days = max(0, int(args.rotation_min_hold_days))
+    cfg.ibkr_entry_cutoff_min = max(0, int(args.ibkr_entry_cutoff_min))
+    cfg.ibkr_order_max_retries = max(1, int(args.ibkr_order_max_retries))
+    cfg.ibkr_fallback_limit_bps = max(1.0, float(args.ibkr_fallback_limit_bps))
 
     if args.tickers:
         cfg.tickers = args.tickers
@@ -2747,7 +2989,7 @@ def main():
             sys.exit(1)
 
         try:
-            universe = load_universe(args.universe_file)
+            universe = load_universe(args.universe_file, strict_us=True)
         except Exception as e:
             print(f"âŒ Chargement univers impossible: {e}")
             sys.exit(1)
@@ -2771,7 +3013,8 @@ def main():
 
         print(f"   Requested={meta.get('requested', args.max_deep)} "
               f"| Allowed={meta.get('allowed', len(selected))} "
-              f"| BudgetCap={meta.get('budget_cap', 'n/a')}")
+              f"| BudgetCap={meta.get('budget_cap', 'n/a')} "
+              f"| InvalidFiltered={meta.get('invalid_filtered', 0)}")
 
         selected_effective = list(selected)
         forced_held = []
@@ -2836,7 +3079,7 @@ def main():
                 dynamic_info = ""
                 universe_count = None
                 if dynamic_universe:
-                    universe = load_universe(args.universe_file)
+                    universe = load_universe(args.universe_file, strict_us=True)
                     universe_count = len(universe)
                     selected, shortlist_df, meta = build_deep_analysis_list(
                         cfg=cfg,
@@ -2863,7 +3106,8 @@ def main():
                     dynamic_info = (
                         f"Universe={len(universe)} | Deep={len(engine.cfg.tickers)} "
                         f"| BudgetCap={meta.get('budget_cap', 'n/a')} "
-                        f"| HeldIncluded={len(forced_held)}"
+                        f"| HeldIncluded={len(forced_held)} "
+                        f"| InvalidFiltered={meta.get('invalid_filtered', 0)}"
                     )
 
                 os.system("cls" if os.name == "nt" else "clear")

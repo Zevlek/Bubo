@@ -12,11 +12,53 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+import re
 
 import numpy as np
 import pandas as pd
 
 from phase1_technical import MarketDataFetcher
+
+
+_VALID_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_BLOCKED_SYMBOLS = {
+    "USD",
+    "EUR",
+    "JPY",
+    "GBP",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+    "CNH",
+}
+_BLOCKED_SUFFIXES = (
+    ".CVR",
+    ".WS",
+    ".W",
+    ".RT",
+    ".WT",
+    ".U",
+    " WI",
+)
+
+
+def is_valid_us_equity_ticker(raw: object) -> bool:
+    symbol = str(raw or "").replace("\ufeff", "").strip().upper()
+    if not symbol:
+        return False
+    if symbol in _BLOCKED_SYMBOLS:
+        return False
+    if symbol.endswith("=X"):
+        return False
+    if any(symbol.endswith(sfx) for sfx in _BLOCKED_SUFFIXES):
+        return False
+    if not _VALID_TICKER_RE.match(symbol):
+        return False
+    # Keep BRK.B/BF.B style class shares, reject long dotted derivatives.
+    if "." in symbol and len(symbol.rsplit(".", 1)[-1]) > 2:
+        return False
+    return True
 
 
 @dataclass
@@ -151,7 +193,7 @@ class APIBudgetManager:
         return selected, summary
 
 
-def load_universe(path: str | Path) -> list[str]:
+def load_universe(path: str | Path, strict_us: bool = False) -> list[str]:
     """
     Load tickers from:
     - TXT: one ticker per line
@@ -186,6 +228,8 @@ def load_universe(path: str | Path) -> list[str]:
     seen = set()
     deduped = []
     for t in tickers:
+        if strict_us and not is_valid_us_equity_ticker(t):
+            continue
         if t not in seen:
             seen.add(t)
             deduped.append(t)
