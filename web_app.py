@@ -15,6 +15,7 @@ from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session, url_for
@@ -85,19 +86,15 @@ _BROKER_CACHE: dict[str, Any] = {
     "last_ok_report": None,
 }
 
-SYMBOL_NAME_CACHE_DIR = DATA_DIR / "cache"
-SYMBOL_NAME_CACHE_PATH = SYMBOL_NAME_CACHE_DIR / "symbol_names.json"
+WEB_TIMEZONE = str(os.getenv("BUBO_WEB_TIMEZONE", "Europe/Paris") or "Europe/Paris").strip() or "Europe/Paris"
 try:
-    SYMBOL_NAME_NEGATIVE_TTL_S = max(600, int(os.getenv("BUBO_SYMBOL_NAME_NEGATIVE_TTL_S", "86400")))
+    _WEB_TZ = ZoneInfo(WEB_TIMEZONE)
 except Exception:
-    SYMBOL_NAME_NEGATIVE_TTL_S = 86400
-_SYMBOL_NAME_CACHE_LOCK = threading.Lock()
-_SYMBOL_NAME_CACHE_LOADED = False
-_SYMBOL_NAME_CACHE: dict[str, dict[str, Any]] = {}
+    _WEB_TZ = ZoneInfo("Europe/Paris")
 
 
 def _now_text() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(_WEB_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _append_log(line: str):
@@ -188,125 +185,6 @@ def _clean_symbol_name(raw_name: Any, symbol: str) -> str:
     return name
 
 
-def _load_symbol_name_cache_once() -> None:
-    global _SYMBOL_NAME_CACHE_LOADED
-    if _SYMBOL_NAME_CACHE_LOADED:
-        return
-    with _SYMBOL_NAME_CACHE_LOCK:
-        if _SYMBOL_NAME_CACHE_LOADED:
-            return
-        cache: dict[str, dict[str, Any]] = {}
-        if SYMBOL_NAME_CACHE_PATH.exists():
-            try:
-                payload = json.loads(SYMBOL_NAME_CACHE_PATH.read_text(encoding="utf-8"))
-            except Exception:
-                payload = {}
-            if isinstance(payload, dict):
-                for raw_symbol, raw_row in payload.items():
-                    symbol = str(raw_symbol or "").strip().upper()
-                    if not symbol or not isinstance(raw_row, dict):
-                        continue
-                    cache[symbol] = {
-                        "name": str(raw_row.get("name", "") or "").strip(),
-                        "checked_at": _safe_int(raw_row.get("checked_at"), 0),
-                    }
-        _SYMBOL_NAME_CACHE.clear()
-        _SYMBOL_NAME_CACHE.update(cache)
-        _SYMBOL_NAME_CACHE_LOADED = True
-
-
-def _save_symbol_name_cache_locked() -> None:
-    try:
-        SYMBOL_NAME_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        SYMBOL_NAME_CACHE_PATH.write_text(
-            json.dumps(_SYMBOL_NAME_CACHE, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-def _resolve_symbol_names(symbols: list[str] | set[str] | tuple[str, ...]) -> dict[str, str]:
-    _load_symbol_name_cache_once()
-    normalized = sorted(
-        {
-            str(symbol or "").strip().upper()
-            for symbol in symbols
-            if str(symbol or "").strip()
-        }
-    )
-    if not normalized:
-        return {}
-
-    now_ts = int(time.time())
-    out: dict[str, str] = {}
-    missing: list[str] = []
-    with _SYMBOL_NAME_CACHE_LOCK:
-        for symbol in normalized:
-            row = _SYMBOL_NAME_CACHE.get(symbol, {})
-            cached_name = str(row.get("name", "") or "").strip()
-            checked_at = _safe_int(row.get("checked_at"), 0)
-            if cached_name:
-                out[symbol] = _clean_symbol_name(cached_name, symbol)
-                continue
-            if checked_at > 0 and (now_ts - checked_at) < SYMBOL_NAME_NEGATIVE_TTL_S:
-                out[symbol] = symbol
-                continue
-            missing.append(symbol)
-
-    updated = False
-    if missing:
-        fetched: dict[str, str] = {}
-        batch_size = 70
-        for i in range(0, len(missing), batch_size):
-            batch = missing[i:i + batch_size]
-            try:
-                resp = requests.get(
-                    "https://query1.finance.yahoo.com/v7/finance/quote",
-                    params={"symbols": ",".join(batch)},
-                    timeout=4.5,
-                )
-            except Exception:
-                continue
-            if resp.status_code != 200:
-                continue
-            try:
-                payload = resp.json()
-            except Exception:
-                continue
-            results = payload.get("quoteResponse", {}).get("result", []) if isinstance(payload, dict) else []
-            if not isinstance(results, list):
-                continue
-            for item in results:
-                if not isinstance(item, dict):
-                    continue
-                symbol = str(item.get("symbol", "") or "").strip().upper()
-                if not symbol:
-                    continue
-                raw_name = (
-                    item.get("longName")
-                    or item.get("shortName")
-                    or item.get("displayName")
-                    or ""
-                )
-                cleaned = _clean_symbol_name(raw_name, symbol)
-                if cleaned and cleaned.upper() != symbol:
-                    fetched[symbol] = cleaned
-
-        with _SYMBOL_NAME_CACHE_LOCK:
-            for symbol in missing:
-                name = fetched.get(symbol, "")
-                _SYMBOL_NAME_CACHE[symbol] = {"name": name, "checked_at": now_ts}
-                out[symbol] = _clean_symbol_name(name, symbol) if name else symbol
-                updated = True
-            if updated:
-                _save_symbol_name_cache_locked()
-
-    for symbol in normalized:
-        out.setdefault(symbol, symbol)
-    return out
-
-
 def _read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
         return {}
@@ -394,7 +272,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
             entry_signal = trade.get("entry_signal") if isinstance(trade.get("entry_signal"), dict) else {}
             exit_signal = trade.get("exit_signal") if isinstance(trade.get("exit_signal"), dict) else {}
 
-            entry_ts = str(trade.get("entry_date", "") or "").strip()
+            entry_ts = str(trade.get("entry_ts", "") or trade.get("entry_date", "") or "").strip()
             if entry_ts:
                 events.append(
                     {
@@ -413,7 +291,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                     }
                 )
 
-            exit_ts = str(trade.get("exit_date", "") or "").strip()
+            exit_ts = str(trade.get("exit_ts", "") or trade.get("exit_date", "") or "").strip()
             if exit_ts:
                 events.append(
                     {
@@ -444,7 +322,7 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
         events.append(
             {
                 "source": "bubo",
-                "timestamp": str(pos.get("entry_date", "") or ""),
+                "timestamp": str(pos.get("entry_ts", "") or pos.get("entry_date", "") or ""),
                 "name": str(pos.get("name", "") or "").strip() or ticker,
                 "ticker": ticker,
                 "side": "SHORT SELL" if is_short else "BUY",
@@ -457,21 +335,6 @@ def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[
                 "event": "open",
             }
         )
-
-    symbols_for_names = {
-        str(ev.get("ticker", "") or "").strip().upper()
-        for ev in events
-        if str(ev.get("ticker", "") or "").strip()
-    }
-    if symbols_for_names:
-        resolved_names = _resolve_symbol_names(symbols_for_names)
-        for ev in events:
-            ticker = str(ev.get("ticker", "") or "").strip().upper()
-            if not ticker:
-                continue
-            current_name = str(ev.get("name", "") or "").strip()
-            if (not current_name) or current_name.upper() == ticker:
-                ev["name"] = resolved_names.get(ticker, ticker)
 
     events.sort(key=lambda row: str(row.get("timestamp", "")), reverse=True)
     if limit > 0:
@@ -500,18 +363,10 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
                     "unrealized_pnl": _safe_float(pos.get("unrealized_pnl"), 0.0),
                     "entry_fee": _safe_float(pos.get("entry_fee"), 0.0),
                     "entry_date": str(pos.get("entry_date", "")),
+                    "entry_ts": str(pos.get("entry_ts", "") or ""),
                     "entry_signal": pos.get("entry_signal") if isinstance(pos.get("entry_signal"), dict) else {},
                 }
             )
-    if positions:
-        resolved_names = _resolve_symbol_names(
-            [str(p.get("ticker", "") or "").strip().upper() for p in positions]
-        )
-        for pos in positions:
-            ticker = str(pos.get("ticker", "") or "").strip().upper()
-            current = str(pos.get("name", "") or "").strip()
-            if ticker and ((not current) or current.upper() == ticker):
-                pos["name"] = resolved_names.get(ticker, ticker)
     positions.sort(key=lambda r: abs(_safe_float(r.get("market_value"), 0.0)), reverse=True)
 
     trades = state.get("trades", [])
@@ -910,31 +765,6 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
         for ex in executions:
             ex.pop("_con_id", None)
 
-        symbols_for_names = {
-            str(pos.get("symbol", "") or "").strip().upper()
-            for pos in positions
-            if str(pos.get("symbol", "") or "").strip()
-        }
-        symbols_for_names.update(
-            {
-                str(ex.get("symbol", "") or "").strip().upper()
-                for ex in executions
-                if str(ex.get("symbol", "") or "").strip()
-            }
-        )
-        if symbols_for_names:
-            resolved_names = _resolve_symbol_names(symbols_for_names)
-            for pos in positions:
-                symbol = str(pos.get("symbol", "") or "").strip().upper()
-                current = str(pos.get("name", "") or "").strip()
-                if symbol and ((not current) or current.upper() == symbol):
-                    pos["name"] = resolved_names.get(symbol, symbol)
-            for ex in executions:
-                symbol = str(ex.get("symbol", "") or "").strip().upper()
-                current = str(ex.get("name", "") or "").strip()
-                if symbol and ((not current) or current.upper() == symbol):
-                    ex["name"] = resolved_names.get(symbol, symbol)
-
         executions.sort(key=lambda r: str(r.get("time", "")), reverse=True)
         executions = executions[:100]
 
@@ -1050,14 +880,14 @@ def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool 
 def _extract_log_day(timestamp_value: Any) -> str:
     raw = str(timestamp_value or "").strip()
     if not raw:
-        return datetime.now().strftime("%Y-%m-%d")
+        return datetime.now(_WEB_TZ).strftime("%Y-%m-%d")
     if len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-":
         return raw[:10]
     try:
         cleaned = raw.replace("Z", "+00:00")
         return datetime.fromisoformat(cleaned).date().isoformat()
     except Exception:
-        return datetime.now().strftime("%Y-%m-%d")
+        return datetime.now(_WEB_TZ).strftime("%Y-%m-%d")
 
 
 def _normalize_llm_error(err: Any) -> str:

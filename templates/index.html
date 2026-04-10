@@ -347,6 +347,7 @@
       overflow: auto;
       border: 1px solid var(--line);
       border-radius: 10px;
+      -webkit-overflow-scrolling: touch;
     }
 
     table {
@@ -527,6 +528,7 @@
       max-height: 520px;
       overflow: auto;
       border-top: 1px solid #e3e9ee;
+      -webkit-overflow-scrolling: touch;
     }
 
     .tx-ai-box {
@@ -619,41 +621,7 @@
       }
 
       table.mobile-stack-table {
-        min-width: 100%;
-      }
-
-      table.mobile-stack-table thead {
-        display: none;
-      }
-
-      table.mobile-stack-table tbody tr {
-        display: block;
-        border-bottom: 1px solid #e3e9ee;
-      }
-
-      table.mobile-stack-table tbody td {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 10px;
-        border-bottom: none;
-        padding: 7px 10px;
-      }
-
-      table.mobile-stack-table tbody td::before {
-        content: attr(data-label);
-        font-weight: 700;
-        color: #4d6a7a;
-        flex: 0 0 42%;
-        max-width: 42%;
-      }
-
-      table.mobile-stack-table tbody tr.tx-ai-detail td {
-        display: block;
-      }
-
-      table.mobile-stack-table tbody tr.tx-ai-detail td::before {
-        content: none;
+        min-width: 720px;
       }
     }
   </style>
@@ -1049,6 +1017,32 @@
       return `${s}s`;
     }
 
+    function formatDateTimeParis(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        const [y, m, d] = raw.split("-");
+        return `${d}/${m}/${y}`;
+      }
+      const cleaned = raw.includes("T") ? raw : raw.replace(" ", "T");
+      const dt = new Date(cleaned);
+      if (!Number.isFinite(dt.getTime())) return raw;
+      try {
+        return new Intl.DateTimeFormat("fr-FR", {
+          timeZone: "Europe/Paris",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false
+        }).format(dt);
+      } catch {
+        return raw;
+      }
+    }
+
     function pnlClass(value) {
       return asNumber(value, 0) >= 0 ? "pnl-pos" : "pnl-neg";
     }
@@ -1259,7 +1253,7 @@
           : "";
         return `
           <tr>
-            <td data-label="Date">${escapeHtml(tx.timestamp || "")}</td>
+            <td data-label="Date">${escapeHtml(formatDateTimeParis(tx.timestamp || ""))}</td>
             <td data-label="Source">${txSourceBadge(String(tx.source || ""))}</td>
             <td data-label="Nom">${escapeHtml(name)}</td>
             <td data-label="Symbole">${escapeHtml(tx.ticker || "")}</td>
@@ -1447,7 +1441,7 @@
         }).join("");
 
         const mode = data.cached ? `cache ${data.cache_age_s || 0}s` : "live";
-        const stamp = data.generated_at ? ` | ${data.generated_at}` : "";
+        const stamp = data.generated_at ? ` | ${formatDateTimeParis(data.generated_at)}` : "";
         const ttl = Number.isFinite(data.ttl_s) ? ` | TTL ${data.ttl_s}s` : "";
         const summary = data.summary || {};
         const counts = `ok:${summary.ok || 0} warn:${summary.warning || 0} err:${summary.error || 0}`;
@@ -1602,7 +1596,7 @@
         const mode = ibkrAvailable ? (ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB direct") : "BUBO local";
         const stale = ibkrAvailable && ibkr.stale ? ` | donnees figees (${String(ibkr.stale_reason || "echec refresh")})` : "";
         portfolioMetaEl.textContent =
-          `${mode}${stale} | Tx Bubo: ${buboRows.length} | Tx IBKR: ${ibkrRows.length} | ${data.generated_at || ""}`;
+          `${mode}${stale} | Tx Bubo: ${buboRows.length} | Tx IBKR: ${ibkrRows.length} | ${formatDateTimeParis(data.generated_at || "")}`;
       } catch (err) {
         portfolioMetaEl.textContent = `Erreur snapshot: ${escapeHtml(err)}`;
       }
@@ -1636,7 +1630,7 @@
         `).join("");
 
         llmHealthMetaEl.textContent =
-          `Total: ${asNumber(totals.total, 0)} | Erreurs: ${asNumber(totals.error, 0)} (${asNumber(totals.error_rate_pct, 0).toFixed(2)}%) | Maj: ${escapeHtml(data.generated_at || "")}`;
+          `Total: ${asNumber(totals.total, 0)} | Erreurs: ${asNumber(totals.error, 0)} (${asNumber(totals.error_rate_pct, 0).toFixed(2)}%) | Maj: ${escapeHtml(formatDateTimeParis(data.generated_at || ""))}`;
       } catch (err) {
         llmHealthBodyEl.innerHTML = `<tr><td colspan='8'>Erreur: ${escapeHtml(err)}</td></tr>`;
         llmHealthMetaEl.textContent = "Erreur";

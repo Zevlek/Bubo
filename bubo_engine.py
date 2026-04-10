@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import numpy as np
@@ -39,6 +40,16 @@ sys.path.insert(0, ".")
 ENGINE_CYCLE_LOG_PATH = Path("data/logs/engine_cycle.jsonl")
 LLM_CALLS_LOG_PATH = Path("data/logs/llm_calls.jsonl")
 ORDERS_LOG_PATH = Path("data/logs/orders.jsonl")
+
+BUBO_TIMEZONE = str(os.getenv("BUBO_TIMEZONE", "Europe/Paris") or "Europe/Paris").strip() or "Europe/Paris"
+try:
+    _BUBO_TZ = ZoneInfo(BUBO_TIMEZONE)
+except Exception:
+    _BUBO_TZ = ZoneInfo("Europe/Paris")
+
+
+def _now_dt() -> datetime:
+    return datetime.now(_BUBO_TZ)
 
 # ─────────────────────────────────────────────
 # Import des modules (graceful si absent)
@@ -448,7 +459,7 @@ class ScoringEngine:
         result = {
             "ticker": ticker,
             "name": WATCHLIST.get(ticker, ticker),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _now_dt().isoformat(timespec="seconds"),
             "scores": {},
             "final_score": 50.0,
             "decision": "HOLD",
@@ -1248,7 +1259,7 @@ def display_dashboard(engine: ScoringEngine, tickers: list) -> dict:
 # ─────────────────────────────────────────────
 
 def _paper_now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return _now_dt().isoformat(timespec="seconds")
 
 
 def _new_paper_state(cfg: EngineConfig) -> dict:
@@ -1952,6 +1963,20 @@ class IBKRPaperAdapter:
                 currency=self.cfg.ibkr_currency,
             )
             ib.qualifyContracts(contract)
+            symbol_name = str(getattr(contract, "description", "") or "").strip() or str(ticker).upper()
+            try:
+                details = ib.reqContractDetails(contract) or []
+            except Exception:
+                details = []
+            if details:
+                detail = details[0]
+                long_name = str(
+                    getattr(detail, "longName", "")
+                    or getattr(detail, "marketName", "")
+                    or ""
+                ).strip()
+                if long_name:
+                    symbol_name = long_name
             order_side = "BUY" if side.upper() == "BUY" else "SELL"
             retries = int(max_retries if max_retries is not None else getattr(self.cfg, "ibkr_order_max_retries", 2))
             retries = max(1, min(5, retries))
@@ -1968,6 +1993,7 @@ class IBKRPaperAdapter:
                 status = str(getattr(trade.orderStatus, "status", "") or "")
 
                 commission = 0.0
+                fill_timestamps: list[str] = []
                 for fill in getattr(trade, "fills", []) or []:
                     rep = getattr(fill, "commissionReport", None)
                     if rep is not None:
@@ -1975,6 +2001,21 @@ class IBKRPaperAdapter:
                             commission += float(getattr(rep, "commission", 0.0) or 0.0)
                         except Exception:
                             pass
+                    execution = getattr(fill, "execution", None)
+                    exec_time = getattr(execution, "time", None) if execution is not None else None
+                    if hasattr(exec_time, "isoformat"):
+                        try:
+                            fill_timestamps.append(exec_time.isoformat())
+                        except Exception:
+                            pass
+                    elif exec_time is not None:
+                        fill_timestamps.append(str(exec_time))
+
+                filled_at = ""
+                if fill_timestamps:
+                    filled_at = sorted(fill_timestamps)[-1]
+                if not filled_at:
+                    filled_at = _paper_now()
 
                 payload = {
                     "ok": bool(filled > 0 and avg_fill > 0),
@@ -1982,6 +2023,8 @@ class IBKRPaperAdapter:
                     "filled": int(max(0, filled)),
                     "avg_fill_price": float(max(0.0, avg_fill)),
                     "commission": float(max(0.0, commission)),
+                    "filled_at": filled_at,
+                    "symbol_name": symbol_name,
                 }
                 if not payload["ok"]:
                     payload["reason"] = f"not filled (status={status})"
@@ -2065,11 +2108,17 @@ class IBKRPaperAdapter:
             return {"ok": False, "reason": str(e), "positions": []}
 
         out = []
+        names_by_conid: dict[int, str] = {}
         for row in pos_rows or []:
             contract = getattr(row, "contract", None)
             symbol = str(getattr(contract, "symbol", "") or "").strip().upper()
             if not symbol:
                 continue
+            con_id = 0
+            try:
+                con_id = int(getattr(contract, "conId", 0) or 0)
+            except Exception:
+                con_id = 0
             try:
                 qty = int(getattr(row, "position", 0) or 0)
             except Exception:
@@ -2090,9 +2139,31 @@ class IBKRPaperAdapter:
                 market_price = None
             if market_price is None or market_price <= 0:
                 market_price = avg_cost if avg_cost > 0 else None
+
+            name = str(getattr(contract, "description", "") or "").strip() or symbol
+            if con_id > 0:
+                cached_name = str(names_by_conid.get(con_id, "") or "").strip()
+                if cached_name:
+                    name = cached_name
+                else:
+                    try:
+                        details = ib.reqContractDetails(contract) or []
+                    except Exception:
+                        details = []
+                    if details:
+                        detail = details[0]
+                        long_name = str(
+                            getattr(detail, "longName", "")
+                            or getattr(detail, "marketName", "")
+                            or ""
+                        ).strip()
+                        if long_name:
+                            name = long_name
+                            names_by_conid[con_id] = long_name
             out.append(
                 {
                     "ticker": symbol,
+                    "name": name,
                     "shares": int(qty),
                     "avg_cost": float(avg_cost),
                     "market_price": float(market_price) if market_price is not None else None,
@@ -2194,6 +2265,9 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     prev = positions.get(ticker, {}) if isinstance(positions, dict) else {}
                     entry_fee = float(prev.get("entry_fee", 0.0) or 0.0)
                     entry_date = str(prev.get("entry_date", date.today().isoformat()) or date.today().isoformat())
+                    entry_ts = str(prev.get("entry_ts", "") or "")
+                    if not entry_ts:
+                        entry_ts = f"{entry_date}T00:00:00"
                     avg_cost = float(p.get("avg_cost", 0.0) or 0.0)
                     last_price = float(p.get("market_price", 0.0) or 0.0)
                     if last_price <= 0:
@@ -2201,13 +2275,15 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                     abs_qty = abs(int(shares))
                     mv = float(shares * last_price)
                     upnl = float((shares * (last_price - avg_cost)) - entry_fee)
+                    resolved_name = str(p.get("name", "") or "").strip() or str(prev.get("name", "") or "").strip() or ticker
                     synced[ticker] = {
                         "ticker": ticker,
-                        "name": str(prev.get("name", ticker) or ticker),
+                        "name": resolved_name,
                         "shares": int(shares),
                         "entry_price": float(avg_cost),
                         "entry_fee": float(entry_fee),
                         "entry_date": entry_date,
+                        "entry_ts": entry_ts,
                         "last_price": float(last_price),
                         "market_value": float(mv),
                         "unrealized_pnl": float(upnl),
@@ -2320,6 +2396,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         exec_px = px * (1 + slippage_rate if is_short else 1 - slippage_rate)
         exit_fee = 0.0
         filled_shares = int(qty)
+        exit_ts = _paper_now()
 
         if broker == "ibkr":
             if ibkr is None or ibkr_trading_disabled:
@@ -2350,6 +2427,7 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
             filled_shares = int(order_res.get("filled", qty))
             exec_px = float(order_res.get("avg_fill_price", exec_px) or exec_px)
             exit_fee = float(order_res.get("commission", 0.0) or 0.0)
+            exit_ts = str(order_res.get("filled_at", "") or exit_ts)
         else:
             gross_for_fee = qty * exec_px
             exit_fee = gross_for_fee * fee_rate
@@ -2380,7 +2458,9 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 "ticker": ticker,
                 "name": str(pos_row.get("name", ticker) or ticker),
                 "entry_date": pos_row.get("entry_date"),
-                "exit_date": date.today().isoformat(),
+                "entry_ts": str(pos_row.get("entry_ts", "") or ""),
+                "exit_ts": exit_ts,
+                "exit_date": str(exit_ts)[:10] if str(exit_ts).strip() else date.today().isoformat(),
                 "entry_price": round(entry_price, 4),
                 "exit_price": round(exec_px, 4),
                 "shares": int(-filled_shares if is_short else filled_shares),
@@ -2620,14 +2700,23 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
                 state["cash"] += (gross - entry_fee)
             else:
                 state["cash"] -= total_debit
+        entry_ts = _paper_now()
+        if broker == "ibkr":
+            entry_ts = str(order_res.get("filled_at", "") or entry_ts)
+        resolved_name = str(r.get("name", "") or "").strip()
+        if broker == "ibkr":
+            resolved_name = str(order_res.get("symbol_name", "") or resolved_name).strip()
+        if not resolved_name:
+            resolved_name = ticker
         signed_shares = -int(shares) if is_short_entry else int(shares)
         positions[ticker] = {
             "ticker": ticker,
-            "name": str(r.get("name", ticker) or ticker),
+            "name": resolved_name,
             "shares": int(signed_shares),
             "entry_price": float(exec_px),
             "entry_fee": float(entry_fee),
-            "entry_date": date.today().isoformat(),
+            "entry_date": str(entry_ts)[:10] if str(entry_ts).strip() else date.today().isoformat(),
+            "entry_ts": entry_ts,
             "last_price": float(px),
             "market_value": float(signed_shares * px),
             "unrealized_pnl": float((signed_shares * (px - exec_px)) - entry_fee),
