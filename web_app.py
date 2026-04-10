@@ -228,6 +228,91 @@ def _paper_report_paths_from_state(state_path: Path) -> dict[str, Path]:
     }
 
 
+def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[str, Any]], limit: int = 300) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+
+    trades = state.get("trades", [])
+    if isinstance(trades, list):
+        for trade in trades:
+            if not isinstance(trade, dict):
+                continue
+            ticker = str(trade.get("ticker", "") or "").strip().upper()
+            if not ticker:
+                continue
+
+            shares = _safe_int(trade.get("shares"), 0)
+            qty = abs(shares)
+            is_short = shares < 0
+            entry_side = "SHORT SELL" if is_short else "BUY"
+            exit_side = "BUY_TO_COVER" if is_short else "SELL"
+            entry_reason = "signal_short" if is_short else "signal_buy"
+            entry_price = _safe_float_or_none(trade.get("entry_price"))
+            exit_price = _safe_float_or_none(trade.get("exit_price"))
+            entry_fee = _safe_float_or_none(trade.get("entry_fee"))
+            exit_fee = _safe_float_or_none(trade.get("exit_fee"))
+            realized = _safe_float_or_none(trade.get("pnl"))
+
+            entry_ts = str(trade.get("entry_date", "") or "").strip()
+            if entry_ts:
+                events.append(
+                    {
+                        "timestamp": entry_ts,
+                        "ticker": ticker,
+                        "side": entry_side,
+                        "quantity": int(qty),
+                        "price": entry_price,
+                        "commission": entry_fee,
+                        "reason": entry_reason,
+                        "realized_pnl": None,
+                        "event": "entry",
+                    }
+                )
+
+            exit_ts = str(trade.get("exit_date", "") or "").strip()
+            if exit_ts:
+                events.append(
+                    {
+                        "timestamp": exit_ts,
+                        "ticker": ticker,
+                        "side": exit_side,
+                        "quantity": int(qty),
+                        "price": exit_price,
+                        "commission": exit_fee,
+                        "reason": str(trade.get("exit_reason", "") or ""),
+                        "realized_pnl": realized,
+                        "event": "exit",
+                    }
+                )
+
+    # Ensure open positions are visible in history even when not closed yet.
+    for pos in positions:
+        ticker = str(pos.get("ticker", "") or "").strip().upper()
+        if not ticker:
+            continue
+        shares = _safe_int(pos.get("shares"), 0)
+        if shares == 0:
+            continue
+        is_short = shares < 0
+        events.append(
+            {
+                "timestamp": str(pos.get("entry_date", "") or ""),
+                "ticker": ticker,
+                "side": "SHORT SELL" if is_short else "BUY",
+                "quantity": abs(shares),
+                "price": _safe_float_or_none(pos.get("entry_price")),
+                "commission": _safe_float_or_none(pos.get("entry_fee")),
+                "reason": "position_open",
+                "realized_pnl": None,
+                "event": "open",
+            }
+        )
+
+    events.sort(key=lambda row: str(row.get("timestamp", "")), reverse=True)
+    if limit > 0:
+        events = events[:limit]
+    return events
+
+
 def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     state_path = Path(str(cfg.get("paper_state") or "data/paper_portfolio_state.json"))
     state = _read_json_file(state_path)
@@ -272,6 +357,10 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
 
     daily_csv_rows = _read_csv_rows(report_paths["daily_csv"], limit=30)
     latest_daily = daily_csv_rows[-1] if daily_csv_rows else {}
+    open_unrealized = sum(_safe_float(p.get("unrealized_pnl"), 0.0) for p in positions)
+    realized = _safe_float(state.get("realized_pnl"), 0.0)
+    total_pnl = realized + open_unrealized
+    transactions = _build_bubo_transaction_history(state, positions, limit=300)
 
     return {
         "ok": True,
@@ -279,7 +368,9 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
         "broker": broker,
         "cash": _safe_float(state.get("cash"), 0.0),
         "equity": _safe_float(state.get("equity"), 0.0),
-        "realized_pnl": _safe_float(state.get("realized_pnl"), 0.0),
+        "realized_pnl": realized,
+        "open_unrealized_pnl": open_unrealized,
+        "total_pnl": total_pnl,
         "positions_count": len(positions),
         "closed_trades_count": len([t for t in closed_trades if t.get("exit_date")]),
         "cycles": _safe_int(state.get("cycles"), 0),
@@ -288,6 +379,8 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
         "closed_trades": closed_trades,
         "closed_trades_csv": trades_csv_rows,
         "recent_actions": recent_actions,
+        "transactions": transactions,
+        "transactions_count": len(transactions),
         "daily_latest": latest_daily,
         "files": {k: str(v) for k, v in report_paths.items()},
     }

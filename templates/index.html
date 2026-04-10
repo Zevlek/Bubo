@@ -658,20 +658,21 @@
             </table>
           </div>
           <div class="table-wrap" style="margin-top:8px;">
-            <h3>Historique des exécutions (frais inclus)</h3>
+            <h3>Historique des transactions Bubo</h3>
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
                   <th>Symbole</th>
-                  <th>Sens</th>
-                  <th>Quantité</th>
+                  <th>Action</th>
+                  <th>Quantite</th>
                   <th>Prix</th>
-                  <th>Commission</th>
+                  <th>Raison</th>
+                  <th>P/L realise</th>
                 </tr>
               </thead>
               <tbody id="ibkr-exec-body">
-                <tr><td colspan="6">Chargement...</td></tr>
+                <tr><td colspan="7">Chargement...</td></tr>
               </tbody>
             </table>
           </div>
@@ -1041,56 +1042,50 @@
         const ibkr = data.ibkr || {};
         const summary = ibkr.account_summary || {};
         const currency = ibkr.currency || "USD";
-        const positions = ibkr.positions || [];
-        const paperByTicker = new Map((paper.positions || []).map(p => [String(p.ticker || "").toUpperCase(), p]));
+        const ibkrAvailable = Boolean(ibkr.enabled && ibkr.ok);
 
-        if (!ibkr.enabled || !ibkr.ok) {
-          const message = ibkr.enabled ? (ibkr.message || "Snapshot IBKR indisponible.") : "IBKR non actif.";
-          portfolioKpisEl.innerHTML = `<div class="kpi"><strong>Erreur:</strong> ${escapeHtml(message)}</div>`;
-          portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position disponible.</td></tr>";
-          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Aucune exécution disponible.</td></tr>";
-          portfolioMetaEl.textContent = "Snapshot indisponible";
-          return;
-        }
+        const paperPositions = Array.isArray(paper.positions) ? paper.positions : [];
+        const paperByTicker = new Map(paperPositions.map(p => [String(p.ticker || "").toUpperCase(), p]));
+        const paperRealized = asNumber(paper.realized_pnl, 0);
+        const paperOpenUnrealized = paperPositions.reduce(
+          (acc, p) => acc + asNumber(p.unrealized_pnl, 0),
+          0
+        );
+        const totalPnl = paperRealized + paperOpenUnrealized;
 
-        const summaryUnrealized = maybeNumber(summary.UnrealizedPnL);
-        const summaryRealized = maybeNumber(summary.RealizedPnL);
-        const positionsUnrealized = positions.reduce((acc, p) => {
-          const qty = asNumber(p.quantity, 0);
-          const avgCost = maybeNumber(p.avg_cost);
-          const marketPrice = maybeNumber(p.market_price);
-          const direct = maybeNumber(p.unrealized_pnl);
-          const derived = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
-            ? (marketPrice - avgCost) * qty
-            : NaN;
-          const v = Number.isFinite(direct) ? direct : derived;
-          return Number.isFinite(v) ? acc + v : acc;
-        }, 0);
-        const hasPositionsUnrealized = positions.some(p => {
-          const qty = asNumber(p.quantity, 0);
-          const avgCost = maybeNumber(p.avg_cost);
-          const marketPrice = maybeNumber(p.market_price);
-          const direct = maybeNumber(p.unrealized_pnl);
-          const derived = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
-            ? (marketPrice - avgCost) * qty
-            : NaN;
-          return Number.isFinite(direct) || Number.isFinite(derived);
-        });
-        const effectiveUnrealized = Number.isFinite(summaryUnrealized)
-          ? summaryUnrealized
-          : (hasPositionsUnrealized ? positionsUnrealized : 0);
-        const effectiveRealized = Number.isFinite(summaryRealized) ? summaryRealized : 0;
-        const totalPnl = effectiveUnrealized + effectiveRealized;
+        const accountText = ibkrAvailable ? escapeHtml(ibkr.account || "n/a") : "n/a";
+        const latencyText = ibkrAvailable ? `${asNumber(ibkr.latency_ms, 0)} ms` : "n/a";
+        const netLiqText = ibkrAvailable ? fmtMoney(summary.NetLiquidation, currency) : fmtMoney(paper.equity, currency);
+        const cashText = ibkrAvailable ? fmtMoney(summary.TotalCashValue, currency) : fmtMoney(paper.cash, currency);
+        const warningText = !ibkrAvailable
+          ? (ibkr.enabled ? (ibkr.message || "Snapshot IBKR indisponible.") : "IBKR non actif.")
+          : "";
 
         portfolioKpisEl.innerHTML = `
-          <div class="kpi"><strong>Compte:</strong> ${escapeHtml(ibkr.account || "n/a")} | <strong>Latence:</strong> ${asNumber(ibkr.latency_ms, 0)} ms</div>
+          <div class="kpi"><strong>Compte:</strong> ${accountText} | <strong>Latence:</strong> ${latencyText}</div>
+          ${warningText ? `<div class="kpi"><strong>Note:</strong> ${escapeHtml(warningText)} (historique local Bubo affiche)</div>` : ""}
           <div class="kpi-line">
-            <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${fmtMoney(summary.NetLiquidation, currency)}</div></div>
-            <div class="kpi-card"><div class="k-label">Liquidités</div><div class="k-val">${fmtMoney(summary.TotalCashValue, currency)}</div></div>
-            <div class="kpi-card"><div class="k-label">Capital géré</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${netLiqText}</div></div>
+            <div class="kpi-card"><div class="k-label">Liquidites</div><div class="k-val">${cashText}</div></div>
+            <div class="kpi-card"><div class="k-label">Capital gere</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">P/L total</div><div class="k-val ${pnlClass(totalPnl)}">${fmtSignedMoney(totalPnl, currency)}</div></div>
           </div>
         `;
+
+        let positions = [];
+        if (ibkrAvailable) {
+          positions = Array.isArray(ibkr.positions) ? ibkr.positions : [];
+        }
+        if (!positions.length && paperPositions.length) {
+          positions = paperPositions.map(p => ({
+            symbol: p.ticker,
+            quantity: p.shares,
+            avg_cost: p.entry_price,
+            market_price: p.last_price,
+            market_value: p.market_value,
+            unrealized_pnl: p.unrealized_pnl
+          }));
+        }
 
         if (!positions.length) {
           portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position ouverte.</td></tr>";
@@ -1130,25 +1125,35 @@
           }).join("");
         }
 
-        const executions = ibkr.executions || [];
-        if (!executions.length) {
-          ibkrExecBodyEl.innerHTML = "<tr><td colspan='6'>Aucune exécution récente.</td></tr>";
+        const history = Array.isArray(paper.transactions) ? paper.transactions : [];
+        if (!history.length) {
+          ibkrExecBodyEl.innerHTML = "<tr><td colspan='7'>Aucune transaction Bubo disponible.</td></tr>";
         } else {
-          ibkrExecBodyEl.innerHTML = executions.slice(0, 60).map(e => `
-            <tr>
-              <td>${escapeHtml(e.time || "")}</td>
-              <td>${escapeHtml(e.symbol || "")}</td>
-              <td>${escapeHtml(e.side || "")}</td>
-              <td>${asNumber(e.shares, 0).toFixed(0)}</td>
-              <td>${asNumber(e.price, 0).toFixed(4)}</td>
-              <td>${asNumber(e.commission, 0).toFixed(2)} ${escapeHtml(e.commission_currency || currency)}</td>
-            </tr>
-          `).join("");
+          ibkrExecBodyEl.innerHTML = history.slice(0, 120).map(tx => {
+            const qty = Math.abs(asNumber(tx.quantity, 0));
+            const px = maybeNumber(tx.price);
+            const realized = maybeNumber(tx.realized_pnl);
+            const reason = String(tx.reason || "") || "-";
+            const pnlCell = Number.isFinite(realized)
+              ? `<span class="${pnlClass(realized)}">${fmtSignedMoney(realized, currency)}</span>`
+              : "-";
+            return `
+              <tr>
+                <td>${escapeHtml(tx.timestamp || "")}</td>
+                <td>${escapeHtml(tx.ticker || "")}</td>
+                <td>${escapeHtml(tx.side || "")}</td>
+                <td>${qty.toFixed(0)}</td>
+                <td>${Number.isFinite(px) ? px.toFixed(4) : "n/a"}</td>
+                <td>${escapeHtml(reason)}</td>
+                <td>${pnlCell}</td>
+              </tr>
+            `;
+          }).join("");
         }
 
-        const mode = ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB direct";
-        const stale = ibkr.stale ? ` | données figées (${String(ibkr.stale_reason || "échec refresh")})` : "";
-        portfolioMetaEl.textContent = `${mode}${stale} | ${data.generated_at || ""}`;
+        const mode = ibkrAvailable ? (ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB direct") : "BUBO local";
+        const stale = ibkrAvailable && ibkr.stale ? ` | donnees figees (${String(ibkr.stale_reason || "echec refresh")})` : "";
+        portfolioMetaEl.textContent = `${mode}${stale} | Tx Bubo: ${history.length} | ${data.generated_at || ""}`;
       } catch (err) {
         portfolioMetaEl.textContent = `Erreur snapshot: ${escapeHtml(err)}`;
       }
