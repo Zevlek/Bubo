@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 US_MARKET_TZ = ZoneInfo("America/New_York")
+PARIS_TZ = ZoneInfo("Europe/Paris")
 US_MARKET_OPEN_HOUR = 9
 US_MARKET_OPEN_MINUTE = 30
 US_MARKET_CLOSE_HOUR = 16
@@ -142,11 +143,14 @@ def get_us_market_clock(now_et: datetime | None = None) -> dict[str, Any]:
 
     return {
         "time_et": now_et.strftime("%Y-%m-%d %H:%M:%S"),
+        "time_paris": now_et.astimezone(PARIS_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         "is_open": bool(is_open),
         "is_holiday": bool(holiday_name),
         "holiday_name": holiday_name,
         "next_open_et": next_open.strftime("%Y-%m-%d %H:%M:%S"),
+        "next_open_paris": next_open.astimezone(PARIS_TZ).strftime("%Y-%m-%d %H:%M:%S"),
         "next_close_et": next_close.strftime("%Y-%m-%d %H:%M:%S") if next_close else "",
+        "next_close_paris": next_close.astimezone(PARIS_TZ).strftime("%Y-%m-%d %H:%M:%S") if next_close else "",
         "seconds_to_open": sec_to_open,
         "seconds_to_close": sec_to_close,
         "note": "Session reguliere NYSE/Nasdaq 09:30-16:00 ET, fériés US standards inclus.",
@@ -165,3 +169,4 @@ def format_duration_compact(seconds: int | float | None) -> str:
     if m > 0:
         return f"{m}m {s:02d}s"
     return f"{s}s"
+
