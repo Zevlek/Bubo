@@ -1434,12 +1434,18 @@
       } else if (m.is_open) {
         const closeFr = m.next_close_paris || m.next_close_et || "";
         marketHoursEl.innerHTML =
-          `MARCHÉ US : <span class="market-state open">OUVERT</span> | Heure NY : ${escapeHtml(m.time_et || "n/a")} | Heure FR : ${escapeHtml(m.time_paris || "n/a")} | Fermeture (heure FR) : ${escapeHtml(closeFr)} (dans ${formatDurationFr(m.seconds_to_close)})`;
+          `MARCHÉ US : <span class="market-state open">OUVERT</span><br>` +
+          `Heure NY : ${escapeHtml(m.time_et || "n/a")}<br>` +
+          `Heure FR : ${escapeHtml(m.time_paris || "n/a")}<br>` +
+          `Fermeture (heure FR) : ${escapeHtml(closeFr)} (dans ${formatDurationFr(m.seconds_to_close)})`;
       } else {
         const openFr = m.next_open_paris || m.next_open_et || "";
-        const holiday = m.holiday_name ? ` | Motif : ${escapeHtml(m.holiday_name)}` : "";
+        const holiday = m.holiday_name ? `<br>Motif : ${escapeHtml(m.holiday_name)}` : "";
         marketHoursEl.innerHTML =
-          `MARCHÉ US : <span class="market-state closed">FERMÉ</span> | Heure NY : ${escapeHtml(m.time_et || "n/a")} | Heure FR : ${escapeHtml(m.time_paris || "n/a")}${holiday} | Réouverture (heure FR) : ${escapeHtml(openFr)} (dans ${formatDurationFr(m.seconds_to_open)})`;
+          `MARCHÉ US : <span class="market-state closed">FERMÉ</span><br>` +
+          `Heure NY : ${escapeHtml(m.time_et || "n/a")}<br>` +
+          `Heure FR : ${escapeHtml(m.time_paris || "n/a")}${holiday}<br>` +
+          `Réouverture (heure FR) : ${escapeHtml(openFr)} (dans ${formatDurationFr(m.seconds_to_open)})`;
       }
     }
 
