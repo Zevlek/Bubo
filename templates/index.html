@@ -370,6 +370,29 @@
       z-index: 1;
     }
 
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    th.sortable::after {
+      content: "⇅";
+      margin-left: 6px;
+      font-size: 0.72rem;
+      color: #8ea2b1;
+    }
+
+    th.sortable[data-sort-dir="asc"]::after {
+      content: "▲";
+      color: #0f6762;
+    }
+
+    th.sortable[data-sort-dir="desc"]::after {
+      content: "▼";
+      color: #0f6762;
+    }
+
     td a {
       color: #0a6f8f;
       text-decoration: none;
@@ -696,13 +719,13 @@
             <table>
               <thead>
                 <tr>
-                  <th>Nom</th>
-                  <th>Symbole</th>
-                  <th>Quantité</th>
-                  <th>Prix moyen</th>
-                  <th>Prix d'entrée</th>
-                  <th>Valeur</th>
-                  <th>P/L</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="name">Nom</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="symbol">Symbole</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="quantity">Quantité</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="avg_cost">Prix moyen</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="entry_price">Prix d'entrée</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="value">Valeur</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="pnl">P/L</th>
                 </tr>
               </thead>
               <tbody id="portfolio-pos-body">
@@ -725,14 +748,14 @@
             <table>
               <thead>
                 <tr>
-                  <th>Date</th>
-                  <th>Source</th>
-                  <th>Symbole</th>
-                  <th>Action</th>
-                  <th>Quantite</th>
-                  <th>Prix</th>
-                  <th>Raison</th>
-                  <th>P/L realise</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="timestamp">Date</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="source">Source</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="ticker">Symbole</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="side">Action</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="quantity">Quantite</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="price">Prix</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="reason">Raison</th>
+                  <th class="sortable" data-sort-table="transactions" data-sort-key="realized_pnl">P/L realise</th>
                 </tr>
               </thead>
               <tbody id="ibkr-exec-body">
@@ -818,8 +841,13 @@
     const llmHealthBodyEl = document.getElementById("llm-health-body");
     let lastPortfolioRefreshEpoch = 0;
     const PORTFOLIO_AUTO_REFRESH_MS = 60000;
+    let latestPositionRows = [];
     let latestTxRows = [];
     let latestTxCurrency = "USD";
+    const sortState = {
+      positions: { key: null, dir: "asc" },
+      transactions: { key: "timestamp", dir: "desc" }
+    };
 
     function configPayload() {
       return {
@@ -955,9 +983,104 @@
       return `<span class="tx-source ibkr">IBKR</span>`;
     }
 
+    function toSortableNumber(value) {
+      if (typeof value === "number") {
+        return Number.isFinite(value) ? value : null;
+      }
+      if (value === null || value === undefined || value === "") return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function compareSortableValues(a, b) {
+      const an = toSortableNumber(a);
+      const bn = toSortableNumber(b);
+      if (an !== null && bn !== null) return an - bn;
+      if (an !== null && bn === null) return -1;
+      if (an === null && bn !== null) return 1;
+      return String(a ?? "").localeCompare(String(b ?? ""), "fr", {
+        sensitivity: "base",
+        numeric: true
+      });
+    }
+
+    function sortRowsForTable(rows, tableName) {
+      const state = sortState[tableName] || {};
+      if (!state.key) return [...rows];
+      const dirFactor = state.dir === "desc" ? -1 : 1;
+      return rows
+        .map((row, idx) => ({ row, idx }))
+        .sort((a, b) => {
+          const cmp = compareSortableValues(a.row[state.key], b.row[state.key]);
+          if (cmp !== 0) return cmp * dirFactor;
+          return a.idx - b.idx;
+        })
+        .map(entry => entry.row);
+    }
+
+    function refreshSortHeaders(tableName) {
+      const state = sortState[tableName] || {};
+      document.querySelectorAll(`th.sortable[data-sort-table="${tableName}"]`).forEach(th => {
+        const key = String(th.dataset.sortKey || "");
+        if (key && state.key === key) {
+          th.dataset.sortDir = state.dir;
+        } else {
+          delete th.dataset.sortDir;
+        }
+      });
+    }
+
+    function toggleSort(tableName, key) {
+      const state = sortState[tableName];
+      if (!state) return;
+      if (state.key === key) {
+        state.dir = state.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.key = key;
+        state.dir = "asc";
+      }
+      refreshSortHeaders(tableName);
+      if (tableName === "positions") {
+        renderPositions();
+      } else if (tableName === "transactions") {
+        renderTransactions();
+      }
+    }
+
+    function renderPositions() {
+      if (!latestPositionRows.length) {
+        portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position ouverte.</td></tr>";
+        return;
+      }
+      const rows = sortRowsForTable(latestPositionRows, "positions");
+      portfolioPosBodyEl.innerHTML = rows.slice(0, 60).map(pos => {
+        const qty = asNumber(pos.quantity, 0);
+        const avgCost = maybeNumber(pos.avg_cost);
+        const entry = maybeNumber(pos.entry_price);
+        const value = maybeNumber(pos.value);
+        const pnl = maybeNumber(pos.pnl);
+        const pnlClassName = Number.isFinite(pnl) ? pnlClass(pnl) : "";
+        const currency = String(pos.currency || "USD");
+        return `
+          <tr>
+            <td>${escapeHtml(pos.name || "n/a")}</td>
+            <td>${escapeHtml(pos.symbol || "n/a")}</td>
+            <td>${qty.toFixed(0)}</td>
+            <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
+            <td>${Number.isFinite(entry) ? entry.toFixed(2) : "n/a"}</td>
+            <td>${Number.isFinite(value) ? fmtMoney(value, currency) : "n/a"}</td>
+            <td class="${pnlClassName}">${fmtSignedMoney(pnl, currency)}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
     function renderTransactions() {
       const mode = txFilterEl ? String(txFilterEl.value || "all") : "all";
-      const rows = latestTxRows.filter(row => txFilterMatch(row, mode));
+      const rows = sortRowsForTable(
+        latestTxRows.filter(row => txFilterMatch(row, mode)),
+        "transactions"
+      );
       if (!rows.length) {
         ibkrExecBodyEl.innerHTML = "<tr><td colspan='8'>Aucune transaction pour ce filtre.</td></tr>";
         return;
@@ -1222,43 +1345,39 @@
           }));
         }
 
-        if (!positions.length) {
-          portfolioPosBodyEl.innerHTML = "<tr><td colspan='7'>Aucune position ouverte.</td></tr>";
-        } else {
-          portfolioPosBodyEl.innerHTML = positions.slice(0, 60).map(pos => {
-            const symbol = String(pos.symbol || "");
-            const key = symbol.toUpperCase();
-            const paperPos = paperByTicker.get(key) || {};
-            const entry = asNumber(paperPos.entry_price, NaN);
-            const avgCost = maybeNumber(pos.avg_cost);
-            const qty = asNumber(pos.quantity, 0);
-            const marketValue = maybeNumber(pos.market_value);
-            const marketPrice = maybeNumber(pos.market_price);
-            const unrealized = maybeNumber(pos.unrealized_pnl);
-            const displayName = symbol || "n/a";
-            const valueFallback = (Number.isFinite(marketPrice) && marketPrice > 0)
-              ? marketPrice * qty
-              : (Number.isFinite(avgCost) ? avgCost * qty : NaN);
-            const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
-              ? valueFallback
-              : marketValue;
-            const unrealizedFallback = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
-              ? (marketPrice - avgCost) * qty
-              : NaN;
-            const displayUnrealized = Number.isFinite(unrealized) ? unrealized : unrealizedFallback;
-            return `
-              <tr>
-                <td>${escapeHtml(displayName)}</td>
-                <td>${escapeHtml(symbol)}</td>
-                <td>${qty.toFixed(0)}</td>
-                <td>${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
-                <td>${Number.isFinite(entry) ? entry.toFixed(2) : (Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a")}</td>
-                <td>${Number.isFinite(displayValue) ? fmtMoney(displayValue, currency) : "n/a"}</td>
-                <td class="${pnlClass(displayUnrealized)}">${fmtSignedMoney(displayUnrealized, currency)}</td>
-              </tr>
-            `;
-          }).join("");
-        }
+        latestPositionRows = positions.map(pos => {
+          const symbol = String(pos.symbol || "");
+          const key = symbol.toUpperCase();
+          const paperPos = paperByTicker.get(key) || {};
+          const entry = asNumber(paperPos.entry_price, NaN);
+          const avgCost = maybeNumber(pos.avg_cost);
+          const qty = asNumber(pos.quantity, 0);
+          const marketValue = maybeNumber(pos.market_value);
+          const marketPrice = maybeNumber(pos.market_price);
+          const unrealized = maybeNumber(pos.unrealized_pnl);
+          const displayName = symbol || "n/a";
+          const valueFallback = (Number.isFinite(marketPrice) && marketPrice > 0)
+            ? marketPrice * qty
+            : (Number.isFinite(avgCost) ? avgCost * qty : NaN);
+          const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
+            ? valueFallback
+            : marketValue;
+          const unrealizedFallback = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
+            ? (marketPrice - avgCost) * qty
+            : NaN;
+          const displayUnrealized = Number.isFinite(unrealized) ? unrealized : unrealizedFallback;
+          return {
+            name: displayName,
+            symbol,
+            quantity: qty,
+            avg_cost: Number.isFinite(avgCost) ? avgCost : null,
+            entry_price: Number.isFinite(entry) ? entry : (Number.isFinite(avgCost) ? avgCost : null),
+            value: Number.isFinite(displayValue) ? displayValue : null,
+            pnl: Number.isFinite(displayUnrealized) ? displayUnrealized : null,
+            currency
+          };
+        });
+        renderPositions();
 
         const buboRows = (Array.isArray(paper.transactions) ? paper.transactions : []).map(tx => ({
           source: "bubo",
@@ -1293,9 +1412,7 @@
           : [];
 
         const ibkrRows = ibkrRowsRaw.filter(tx => !buboKeys.has(txMatchKey(tx)));
-        latestTxRows = [...buboRows, ...ibkrRows].sort(
-          (a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || ""))
-        );
+        latestTxRows = [...buboRows, ...ibkrRows];
         latestTxCurrency = currency;
         renderTransactions();
 
@@ -1371,6 +1488,16 @@
     });
     document.getElementById("btn-portfolio").addEventListener("click", () => refreshPortfolio(true));
     document.getElementById("btn-llm-health").addEventListener("click", () => refreshLlmHealth(true));
+    document.querySelectorAll("th.sortable[data-sort-table][data-sort-key]").forEach(th => {
+      th.addEventListener("click", () => {
+        const tableName = String(th.dataset.sortTable || "");
+        const key = String(th.dataset.sortKey || "");
+        if (!tableName || !key) return;
+        toggleSort(tableName, key);
+      });
+    });
+    refreshSortHeaders("positions");
+    refreshSortHeaders("transactions");
     if (txFilterEl) {
       txFilterEl.addEventListener("change", () => renderTransactions());
     }
