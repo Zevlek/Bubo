@@ -29,14 +29,25 @@ class PaperTradingTests(unittest.TestCase):
         engine.fetcher = None
         self.engine = engine
 
-    def _run_cycle(self, results: dict, prices: dict, state_path: Path) -> dict:
+    def _run_cycle(self,
+                   results: dict,
+                   prices: dict,
+                   state_path: Path,
+                   trade_enabled: bool = True,
+                   trade_pause_reason: str = "") -> dict:
         original_latest_price = bubo_engine._latest_price
         try:
             def fake_latest_price(_engine, ticker: str, _cache: dict):
                 return prices.get(ticker)
 
             bubo_engine._latest_price = fake_latest_price
-            return run_paper_cycle(self.engine, results, str(state_path))
+            return run_paper_cycle(
+                self.engine,
+                results,
+                str(state_path),
+                trade_enabled=trade_enabled,
+                trade_pause_reason=trade_pause_reason,
+            )
         finally:
             bubo_engine._latest_price = original_latest_price
 
@@ -123,6 +134,44 @@ class PaperTradingTests(unittest.TestCase):
             summary = self._run_cycle({}, {"AAA": 97.0}, state_path)
             self.assertEqual(summary["positions"], 0)
             self.assertTrue(any("stop_loss" in a for a in summary["actions"]))
+
+    def test_trading_gate_pauses_orders_but_keeps_mark_to_market(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+
+            buy_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 80.0,
+                    "confidence": 80.0,
+                }
+            }
+            summary_buy = self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
+            self.assertEqual(summary_buy["positions"], 1)
+
+            sell_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "SELL",
+                    "position_size_pct": 0.0,
+                    "final_score": 10.0,
+                    "confidence": 90.0,
+                }
+            }
+            summary_paused = self._run_cycle(
+                sell_signal,
+                {"AAA": 110.0},
+                state_path,
+                trade_enabled=False,
+                trade_pause_reason="market closed",
+            )
+            self.assertFalse(summary_paused["trading_enabled"])
+            self.assertEqual(summary_paused["positions"], 1)
+            self.assertEqual(summary_paused["actions"], [])
+            self.assertTrue(any("Trading gate:" in w for w in summary_paused.get("warnings", [])))
+            self.assertGreater(summary_paused["unrealized_pnl"], 0.0)
 
     def test_rotation_skips_same_day_position_when_min_hold_active(self):
         with tempfile.TemporaryDirectory() as tmp:

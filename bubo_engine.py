@@ -40,6 +40,7 @@ sys.path.insert(0, ".")
 ENGINE_CYCLE_LOG_PATH = Path("data/logs/engine_cycle.jsonl")
 LLM_CALLS_LOG_PATH = Path("data/logs/llm_calls.jsonl")
 ORDERS_LOG_PATH = Path("data/logs/orders.jsonl")
+FINBERT_HISTORY_LOG_PATH = Path("data/logs/finbert_history.jsonl")
 
 BUBO_TIMEZONE = str(os.getenv("BUBO_TIMEZONE", "Europe/Paris") or "Europe/Paris").strip() or "Europe/Paris"
 try:
@@ -158,6 +159,7 @@ class EngineConfig:
     backtest_period_years: int = 2
     watch_interval_min: int = 30
     us_market_only: bool = True
+    analyze_when_us_closed: bool = True
     use_finbert: bool = True
     decision_engine: str = "llm"  # llm | rules
     paper_broker: str = "local"  # local | ibkr
@@ -527,6 +529,7 @@ class ScoringEngine:
                 ns = self._score_news(ticker)
                 result["scores"]["news"] = ns["score"]
                 result["reasons"].extend(ns.get("reasons", []))
+                result["news_snapshot"] = ns.get("snapshot", {})
             except Exception as e:
                 result["warnings"].append(f"News: {e}")
 
@@ -693,8 +696,19 @@ class ScoringEngine:
                           f"score {daily.sentiment_score:+.3f})")
             if daily.top_headlines:
                 reasons.append(f"  → {daily.top_headlines[0][:80]}")
-
-        return {"score": round(max(0, min(100, score)), 1), "reasons": reasons}
+        snapshot = {
+            "ticker": str(ticker or "").strip().upper(),
+            "score_component": round(max(0, min(100, score)), 1),
+            "sentiment_score": float(daily.sentiment_score),
+            "sentiment_signal": int(daily.signal),
+            "article_count": int(daily.article_count),
+            "positive_count": int(daily.positive_count),
+            "negative_count": int(daily.negative_count),
+            "neutral_count": int(daily.neutral_count),
+            "avg_confidence": float(daily.avg_confidence),
+            "top_headline": str((daily.top_headlines[0] if daily.top_headlines else "") or ""),
+        }
+        return {"score": snapshot["score_component"], "reasons": reasons, "snapshot": snapshot}
 
     def _score_social(self, ticker: str) -> dict:
         data = self.social_pipeline.analyze_ticker(ticker)
@@ -1782,6 +1796,8 @@ def log_cycle_outputs(results: dict,
             "positions": summary.get("positions"),
             "actions_count": len(summary.get("actions", []) or []),
             "warnings_count": len(summary.get("warnings", []) or []),
+            "trading_enabled": bool(summary.get("trading_enabled", True)),
+            "trading_pause_reason": str(summary.get("trading_pause_reason", "") or ""),
         })
     _append_jsonl(ENGINE_CYCLE_LOG_PATH, cycle_row)
 
@@ -1800,6 +1816,27 @@ def log_cycle_outputs(results: dict,
             "warnings": (row.get("warnings") or [])[:5],
         }
         _append_jsonl(LLM_CALLS_LOG_PATH, llm_row)
+        news_snapshot = row.get("news_snapshot", {}) if isinstance(row, dict) else {}
+        if isinstance(news_snapshot, dict) and news_snapshot:
+            finbert_row = {
+                "timestamp": ts,
+                "mode": mode,
+                "ticker": ticker,
+                "score_component": news_snapshot.get("score_component"),
+                "sentiment_score": news_snapshot.get("sentiment_score"),
+                "sentiment_signal": news_snapshot.get("sentiment_signal"),
+                "article_count": news_snapshot.get("article_count"),
+                "positive_count": news_snapshot.get("positive_count"),
+                "negative_count": news_snapshot.get("negative_count"),
+                "neutral_count": news_snapshot.get("neutral_count"),
+                "avg_confidence": news_snapshot.get("avg_confidence"),
+                "top_headline": news_snapshot.get("top_headline"),
+                "final_decision": row.get("decision"),
+                "final_score": row.get("final_score"),
+                "confidence": row.get("confidence"),
+                "llm_status": row.get("llm_status"),
+            }
+            _append_jsonl(FINBERT_HISTORY_LOG_PATH, finbert_row)
 
     if summary:
         order_events = list(summary.get("order_events", []) or [])
@@ -2172,10 +2209,16 @@ class IBKRPaperAdapter:
         return {"ok": True, "positions": out}
 
 
-def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> dict:
+def run_paper_cycle(engine: ScoringEngine,
+                    results: dict,
+                    state_path: str,
+                    trade_enabled: bool = True,
+                    trade_pause_reason: str = "") -> dict:
     """
     Execute one paper-trading cycle from current signals.
     Long/short paper trading with slippage/fees and persistent state.
+    If trade_enabled is False, positions are marked-to-market but no order
+    (entry/exit) is sent during this cycle.
     """
     cfg = engine.cfg
     state = load_paper_state(state_path, cfg)
@@ -2199,6 +2242,12 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
     actions = []
     order_events = []
     warnings_list = []
+    trading_enabled = bool(trade_enabled)
+    trading_pause_reason = str(trade_pause_reason or "").strip()
+    if not trading_enabled:
+        if not trading_pause_reason:
+            trading_pause_reason = "trading paused for this cycle"
+        warnings_list.append(f"Trading gate: {trading_pause_reason}")
     price_cache = {}
     empty_sync_streak = int(state.get("ibkr_empty_sync_streak", 0) or 0)
 
@@ -2377,6 +2426,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
         return float(base)
 
     def _close_position(ticker: str, exit_reason: str, exit_signal: dict[str, object] | None = None) -> bool:
+        if not trading_enabled:
+            return False
         pos_row = positions.get(ticker)
         if not isinstance(pos_row, dict):
             return False
@@ -2537,35 +2588,39 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
     ibkr_entry_block_reason = ""
     if broker == "ibkr":
-        market_clock = get_us_market_clock()
-        cutoff_s = max(0, int(float(getattr(cfg, "ibkr_entry_cutoff_min", 5) or 0) * 60))
-        if not bool(market_clock.get("is_open")):
-            ibkr_entry_block_reason = "market closed"
+        if not trading_enabled:
+            ibkr_entry_block_reason = trading_pause_reason or "trading paused"
         else:
-            seconds_to_close = market_clock.get("seconds_to_close")
-            if isinstance(seconds_to_close, int) and seconds_to_close <= cutoff_s:
-                ibkr_entry_block_reason = (
-                    f"entry cutoff active ({max(0, seconds_to_close)}s to close <= {cutoff_s}s)"
-                )
+            market_clock = get_us_market_clock()
+            cutoff_s = max(0, int(float(getattr(cfg, "ibkr_entry_cutoff_min", 5) or 0) * 60))
+            if not bool(market_clock.get("is_open")):
+                ibkr_entry_block_reason = "market closed"
+            else:
+                seconds_to_close = market_clock.get("seconds_to_close")
+                if isinstance(seconds_to_close, int) and seconds_to_close <= cutoff_s:
+                    ibkr_entry_block_reason = (
+                        f"entry cutoff active ({max(0, seconds_to_close)}s to close <= {cutoff_s}s)"
+                    )
         if ibkr_entry_block_reason:
             warnings_list.append(f"IBKR entry gate: {ibkr_entry_block_reason}")
 
     # Entry logic after exits.
     candidate_rows = []
-    for row in (results or {}).values():
-        decision = str(row.get("decision", "") or "").strip().upper()
-        side = None
-        if decision in ("BUY", "STRONG BUY"):
-            side = "long"
-        elif cfg.allow_short and decision in ("SELL", "STRONG SELL"):
-            side = "short"
-        if side is None:
-            continue
-        score = float(row.get("final_score", 50.0) or 50.0)
-        conf = float(row.get("confidence", 0.0) or 0.0)
-        # For shorts, lower scores are stronger bearish conviction.
-        rank_score = score if side == "long" else (100.0 - score)
-        candidate_rows.append((rank_score, conf, side, row))
+    if trading_enabled:
+        for row in (results or {}).values():
+            decision = str(row.get("decision", "") or "").strip().upper()
+            side = None
+            if decision in ("BUY", "STRONG BUY"):
+                side = "long"
+            elif cfg.allow_short and decision in ("SELL", "STRONG SELL"):
+                side = "short"
+            if side is None:
+                continue
+            score = float(row.get("final_score", 50.0) or 50.0)
+            conf = float(row.get("confidence", 0.0) or 0.0)
+            # For shorts, lower scores are stronger bearish conviction.
+            rank_score = score if side == "long" else (100.0 - score)
+            candidate_rows.append((rank_score, conf, side, row))
 
     candidate_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
@@ -2808,6 +2863,8 @@ def run_paper_cycle(engine: ScoringEngine, results: dict, state_path: str) -> di
 
     return {
         "paper_broker": state.get("paper_broker", broker),
+        "trading_enabled": bool(trading_enabled),
+        "trading_pause_reason": str(trading_pause_reason),
         "managed_capital": round(float(managed_capital), 4),
         "ibkr_existing_positions_policy": ibkr_positions_policy if broker == "ibkr" else "",
         "state_path": state_path,
@@ -2857,6 +2914,9 @@ def print_paper_summary(summary: dict):
 
     print("\n  Paper:")
     print(f"   Broker={summary.get('paper_broker', 'local')}")
+    if not bool(summary.get("trading_enabled", True)):
+        reason = str(summary.get("trading_pause_reason", "") or "trading paused")
+        print(f"   TradingGate=paused ({reason})")
     if summary.get("paper_broker") == "ibkr":
         print(f"   ManagedCapital={summary.get('managed_capital', 0.0):.2f} "
               f"| ExistingPositions={summary.get('ibkr_existing_positions_policy', 'include')}")
@@ -2982,6 +3042,12 @@ def main():
         default=str(os.getenv("BUBO_US_MARKET_ONLY", "1")).strip().lower() in {"1", "true", "yes", "on"},
         help="En mode watch, execute les cycles seulement pendant la session reguliere US (09:30-16:00 ET).",
     )
+    parser.add_argument(
+        "--analyze-when-us-closed",
+        action=argparse.BooleanOptionalAction,
+        default=str(os.getenv("BUBO_ANALYZE_WHEN_US_CLOSED", "1")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Si session US fermee: continue l'analyse (FinBERT/LLM) sans executer d'ordres.",
+    )
     parser.add_argument("--screen-only", action="store_true",
                         help="Ne fait que la preslection et exporte la shortlist")
     parser.add_argument("--no-budget-gate", action="store_true",
@@ -3095,6 +3161,7 @@ def main():
     cfg.initial_capital = args.capital
     cfg.watch_interval_min = max(1, int(args.watch_interval_min))
     cfg.us_market_only = bool(args.us_market_only)
+    cfg.analyze_when_us_closed = bool(args.analyze_when_us_closed)
     cfg.use_finbert = not args.no_finbert
     cfg.allow_short = bool(args.allow_short)
     cfg.decision_engine = _normalize_decision_engine(args.decision_engine)
@@ -3190,27 +3257,42 @@ def main():
         print(f"\n  Mode surveillance — refresh {cfg.watch_interval_min}min")
         if cfg.us_market_only:
             print("  Session US only: actif (09:30-16:00 ET, feries US standards inclus)")
+            if cfg.analyze_when_us_closed:
+                print("  Hors session US: analyse active, trading en pause")
+            else:
+                print("  Hors session US: cycles en pause complete")
         if dynamic_universe:
             print("  Universe dynamique actif: prescreen relance a chaque cycle")
         print(f"  Ctrl+C pour arrêter\n")
         while True:
             try:
                 market_clock = get_us_market_clock()
+                trading_enabled_this_cycle = True
+                trading_pause_reason = ""
                 if cfg.us_market_only and not market_clock.get("is_open"):
                     wait_s = max(30, int(market_clock.get("seconds_to_open") or (cfg.watch_interval_min * 60)))
-                    os.system("cls" if os.name == "nt" else "clear")
-                    print("\n" + "=" * 70)
-                    print("  BUBO — UNIFIED DASHBOARD")
-                    print(f"  NY time: {market_clock.get('time_et')}")
-                    print("=" * 70)
-                    print("  Marche US ferme: cycles en pause")
-                    holiday_hint = market_clock.get("holiday_name", "")
+                    if not cfg.analyze_when_us_closed:
+                        os.system("cls" if os.name == "nt" else "clear")
+                        print("\n" + "=" * 70)
+                        print("  BUBO — UNIFIED DASHBOARD")
+                        print(f"  NY time: {market_clock.get('time_et')}")
+                        print("=" * 70)
+                        print("  Marche US ferme: cycles en pause")
+                        holiday_hint = market_clock.get("holiday_name", "")
+                        if holiday_hint:
+                            print(f"  Motif fermeture: {holiday_hint}")
+                        print(f"  Reouverture: {market_clock.get('next_open_et')} (dans {format_duration_compact(wait_s)})")
+                        print("  Heures regulieres: 09:30-16:00 ET (feries US standards inclus)")
+                        time.sleep(wait_s)
+                        continue
+                    trading_enabled_this_cycle = False
+                    holiday_hint = str(market_clock.get("holiday_name", "") or "").strip()
+                    trading_pause_reason = "market closed"
                     if holiday_hint:
-                        print(f"  Motif fermeture: {holiday_hint}")
-                    print(f"  Reouverture: {market_clock.get('next_open_et')} (dans {format_duration_compact(wait_s)})")
-                    print("  Heures regulieres: 09:30-16:00 ET (feries US standards inclus)")
-                    time.sleep(wait_s)
-                    continue
+                        trading_pause_reason = f"{trading_pause_reason} ({holiday_hint})"
+                    next_open = str(market_clock.get("next_open_et", "") or "").strip()
+                    if next_open:
+                        trading_pause_reason = f"{trading_pause_reason}; next open {next_open}"
 
                 dynamic_info = ""
                 universe_count = None
@@ -3257,9 +3339,17 @@ def main():
                     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
                     print("=" * 70)
                     print("  Aucune action retenue pour ce cycle")
+                if not trading_enabled_this_cycle:
+                    print("  Trading gate: marche US fermee, analyse uniquement (aucun ordre)")
 
                 if args.paper:
-                    summary = run_paper_cycle(engine, cycle_results, paper_state_path)
+                    summary = run_paper_cycle(
+                        engine,
+                        cycle_results,
+                        paper_state_path,
+                        trade_enabled=trading_enabled_this_cycle,
+                        trade_pause_reason=trading_pause_reason,
+                    )
                     print_paper_summary(summary)
                     if args.paper_webhook:
                         sent, reason = notify_paper_webhook(args.paper_webhook, summary, watch_mode=True)
@@ -3306,7 +3396,26 @@ def main():
         results = display_dashboard(engine, cfg.tickers)
         summary = None
         if args.paper:
-            summary = run_paper_cycle(engine, results, paper_state_path)
+            trading_enabled_single = True
+            trading_pause_reason_single = ""
+            if cfg.us_market_only:
+                market_clock_single = get_us_market_clock()
+                if not bool(market_clock_single.get("is_open")):
+                    trading_enabled_single = False
+                    holiday_hint = str(market_clock_single.get("holiday_name", "") or "").strip()
+                    trading_pause_reason_single = "market closed"
+                    if holiday_hint:
+                        trading_pause_reason_single = f"{trading_pause_reason_single} ({holiday_hint})"
+                    next_open = str(market_clock_single.get("next_open_et", "") or "").strip()
+                    if next_open:
+                        trading_pause_reason_single = f"{trading_pause_reason_single}; next open {next_open}"
+            summary = run_paper_cycle(
+                engine,
+                results,
+                paper_state_path,
+                trade_enabled=trading_enabled_single,
+                trade_pause_reason=trading_pause_reason_single,
+            )
             print_paper_summary(summary)
             if args.paper_webhook:
                 sent, reason = notify_paper_webhook(args.paper_webhook, summary, watch_mode=False)

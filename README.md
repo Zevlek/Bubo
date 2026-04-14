@@ -57,6 +57,7 @@ http://IP_DU_NAS:7654
 - Un tableau `Sante LLM` affiche les erreurs par jour (volume, taux d'erreur, top erreur, modele dominant).
 - Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
 - Le mode watch US-only tient compte des jours feries US standards (NYSE/Nasdaq).
+- En mode hybride (`BUBO_US_MARKET_ONLY=1` + `BUBO_ANALYZE_WHEN_US_CLOSED=1`), Bubo continue les analyses hors session mais n'envoie aucun ordre.
 - En mode univers dynamique, les positions deja ouvertes sont automatiquement reinjectees dans la liste d'analyse detaillee (safety include), meme hors top preselection.
 
 ## Observabilite (logs JSONL)
@@ -64,6 +65,7 @@ http://IP_DU_NAS:7654
 - `data/logs/engine_cycle.jsonl`: resume de chaque cycle (decisions, statuts LLM, erreur cycle, metriques paper).
 - `data/logs/llm_calls.jsonl`: detail par ticker (decision, score, confiance, statut/modele/erreur LLM).
 - `data/logs/orders.jsonl`: executions et ordres skips (inclut les raisons IBKR).
+- `data/logs/finbert_history.jsonl`: historique du signal news FinBERT par ticker/cycle (score, signal, volume d'articles, headline principal).
 - `data/logs/web_runtime.log`: flux runtime UI + stdout/stderr moteur (tracebacks inclus, utile pour debug infra).
 - Le mode LLM est en **fail-closed**: si la reponse LLM est invalide/incomplete, le moteur passe en `NO_DECISION` (plus de `HOLD 50/0` silencieux).
 
@@ -133,6 +135,7 @@ services:
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
       BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
       BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
+      BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-1}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -231,6 +234,7 @@ services:
       BUBO_MAX_DEEP: ${BUBO_MAX_DEEP:-8}
       BUBO_WATCH_INTERVAL_MIN: ${BUBO_WATCH_INTERVAL_MIN:-30}
       BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
+      BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-1}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -351,6 +355,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_MAX_DEEP` | Nombre de titres analyses en profondeur | Non | Entier `>= 1` (souvent `<= BUBO_PRESELECT_TOP`) | `8` |
 | `BUBO_WATCH_INTERVAL_MIN` | Intervalle entre deux cycles en mode watch | Non | Entier `>= 1` (minutes) | `30` |
 | `BUBO_US_MARKET_ONLY` | En mode watch, n'execute les cycles que pendant la session reguliere US | Non | `0` ou `1` | `1` |
+| `BUBO_ANALYZE_WHEN_US_CLOSED` | Si marche US ferme: continue l'analyse (FinBERT/LLM), mais bloque les ordres | Non | `0` ou `1` | `1` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
 | `BUBO_ALLOW_SHORT` | Autorise les shorts (SELL d'ouverture) | Non | `0` ou `1` | `0` |
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |

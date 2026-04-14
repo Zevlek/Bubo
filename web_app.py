@@ -1602,6 +1602,7 @@ def get_default_config() -> dict[str, Any]:
         "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "8"), 8, minimum=1),
         "watch_interval_min": _coerce_int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30"), 30, minimum=1),
         "us_market_only": _env_bool("BUBO_US_MARKET_ONLY", True),
+        "analyze_when_us_closed": _env_bool("BUBO_ANALYZE_WHEN_US_CLOSED", True),
         "capital": _coerce_float(os.getenv("BUBO_CAPITAL", "10000"), 10000.0, minimum=1.0),
         "allow_short": _env_bool("BUBO_ALLOW_SHORT", False),
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),
@@ -1673,6 +1674,10 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         minimum=1,
     )
     cfg["us_market_only"] = _coerce_bool(payload.get("us_market_only"), cfg["us_market_only"])
+    cfg["analyze_when_us_closed"] = _coerce_bool(
+        payload.get("analyze_when_us_closed"),
+        cfg["analyze_when_us_closed"],
+    )
     cfg["capital"] = _coerce_float(payload.get("capital", cfg["capital"]), cfg["capital"], minimum=1.0)
     cfg["allow_short"] = _coerce_bool(payload.get("allow_short"), cfg["allow_short"])
     cfg["ibkr_port"] = _coerce_int(payload.get("ibkr_port", cfg["ibkr_port"]), cfg["ibkr_port"], minimum=1)
@@ -1751,6 +1756,10 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.append("--us-market-only")
     else:
         cmd.append("--no-us-market-only")
+    if cfg["analyze_when_us_closed"]:
+        cmd.append("--analyze-when-us-closed")
+    else:
+        cmd.append("--no-analyze-when-us-closed")
 
     cmd.extend(["--capital", str(cfg["capital"])])
     if cfg["allow_short"]:
