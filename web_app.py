@@ -106,6 +106,12 @@ _BROKER_CACHE: dict[str, Any] = {
     "last_ok_report": None,
 }
 
+_PORTFOLIO_CFG_CACHE_LOCK = threading.Lock()
+_PORTFOLIO_CFG_CACHE: dict[str, Any] = {
+    "cfg": None,
+    "updated_at": 0.0,
+}
+
 BUDGET_MODE_CUSTOM = "custom"
 BUDGET_MODE_050_SHORT = "budget_050_short"
 _SUPPORTED_BUDGET_MODES = {BUDGET_MODE_CUSTOM, BUDGET_MODE_050_SHORT}
@@ -739,6 +745,40 @@ def _ibkr_snapshot_signature(cfg: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
+def _ibkr_cfg_is_complete(cfg: dict[str, Any]) -> bool:
+    host = str(cfg.get("ibkr_host") or "").strip()
+    port = _coerce_int(cfg.get("ibkr_port"), 0, minimum=0)
+    return bool(host) and int(port) > 0
+
+
+def _cache_last_portfolio_cfg(cfg: dict[str, Any]):
+    if not isinstance(cfg, dict):
+        return
+    payload = {
+        "paper_enabled": bool(cfg.get("paper_enabled")),
+        "paper_broker": str(cfg.get("paper_broker", "")),
+        "ibkr_host": str(cfg.get("ibkr_host", "")),
+        "ibkr_port": _coerce_int(cfg.get("ibkr_port"), 0, minimum=0),
+        "ibkr_client_id": _coerce_int(cfg.get("ibkr_client_id"), 42, minimum=1),
+        "ibkr_account": str(cfg.get("ibkr_account", "")),
+        "ibkr_exchange": str(cfg.get("ibkr_exchange", "")),
+        "ibkr_currency": str(cfg.get("ibkr_currency", "")),
+        "ibkr_capital_limit": _coerce_float(cfg.get("ibkr_capital_limit"), 10000.0, minimum=1.0),
+        "ibkr_existing_positions_policy": str(cfg.get("ibkr_existing_positions_policy", "include")),
+    }
+    with _PORTFOLIO_CFG_CACHE_LOCK:
+        _PORTFOLIO_CFG_CACHE["cfg"] = payload
+        _PORTFOLIO_CFG_CACHE["updated_at"] = time.time()
+
+
+def _get_cached_portfolio_cfg() -> dict[str, Any] | None:
+    with _PORTFOLIO_CFG_CACHE_LOCK:
+        cached = _PORTFOLIO_CFG_CACHE.get("cfg")
+        if isinstance(cached, dict):
+            return dict(cached)
+    return None
+
+
 def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
     enabled = bool(cfg.get("paper_enabled")) and str(cfg.get("paper_broker")) == "ibkr"
     if not enabled:
@@ -1160,10 +1200,51 @@ def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool 
     cfg = _sanitize_config(overrides)
     paper = _build_paper_snapshot(cfg)
     ibkr = get_ibkr_snapshot(cfg, force=force)
+    source = "request"
+
+    # Robust fallback path:
+    # if UI sends an incomplete/invalid IBKR config transiently, reuse last known
+    # valid config (or defaults) so portfolio refresh works without requiring any
+    # prior manual connectivity action.
+    needs_fallback = (
+        bool(ibkr.get("enabled", False))
+        and not bool(ibkr.get("ok", False))
+        and (
+            ("host/port" in str(ibkr.get("message", "") or "").strip().lower())
+            or (not _ibkr_cfg_is_complete(cfg))
+        )
+    )
+    if needs_fallback:
+        fallback_candidates: list[tuple[str, dict[str, Any]]] = []
+        cached_cfg = _get_cached_portfolio_cfg()
+        if isinstance(cached_cfg, dict):
+            merged_cached = dict(cfg)
+            merged_cached.update(cached_cfg)
+            fallback_candidates.append(("cache", merged_cached))
+        defaults_cfg = _sanitize_config(None)
+        fallback_candidates.append(("defaults", defaults_cfg))
+
+        primary_sig = _ibkr_snapshot_signature(cfg)
+        for src, candidate_cfg in fallback_candidates:
+            if _ibkr_snapshot_signature(candidate_cfg) == primary_sig:
+                continue
+            if not _ibkr_cfg_is_complete(candidate_cfg):
+                continue
+            candidate_ibkr = get_ibkr_snapshot(candidate_cfg, force=force)
+            if bool(candidate_ibkr.get("ok", False)):
+                ibkr = candidate_ibkr
+                cfg = candidate_cfg
+                source = src
+                break
+
+    if bool(ibkr.get("ok", False)):
+        _cache_last_portfolio_cfg(cfg)
+
     return {
         "generated_at": _now_text(),
         "paper": paper,
         "ibkr": ibkr,
+        "config_source": source,
         "config": {
             "paper_enabled": cfg.get("paper_enabled"),
             "paper_broker": cfg.get("paper_broker"),

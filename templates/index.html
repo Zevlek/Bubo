@@ -1781,8 +1781,10 @@
 
         const mode = ibkrAvailable ? (ibkr.cached ? `IB cache ${ibkr.cache_age_s || 0}s` : "IB direct") : "BUBO local";
         const stale = ibkrAvailable && ibkr.stale ? ` | donnees figees (${String(ibkr.stale_reason || "echec refresh")})` : "";
+        const source = String(data.config_source || "request");
+        const cfgHint = source !== "request" ? ` | cfg:${source}` : "";
         portfolioMetaEl.textContent =
-          `${mode}${stale} | Tx Bubo: ${buboRows.length} | Tx IBKR: ${ibkrRows.length} | ${formatDateTimeParis(data.generated_at || "")}`;
+          `${mode}${stale}${cfgHint} | Tx Bubo: ${buboRows.length} | Tx IBKR: ${ibkrRows.length} | ${formatDateTimeParis(data.generated_at || "")}`;
       } catch (err) {
         portfolioMetaEl.textContent = `Erreur snapshot: ${escapeHtml(err)}`;
       }
