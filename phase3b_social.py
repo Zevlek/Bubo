@@ -201,10 +201,6 @@ def load_config(path: str = "social_config.json") -> SocialConfig:
                 setattr(cfg, attr, str(val).strip())
                 break
 
-    raw_reddit_enabled = os.environ.get("BUBO_REDDIT_ENABLED", os.environ.get("REDDIT_ENABLED", ""))
-    if str(raw_reddit_enabled).strip():
-        cfg.reddit_enabled = str(raw_reddit_enabled).strip().lower() in {"1", "true", "yes", "on"}
-
     return cfg
 
 

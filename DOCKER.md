@@ -18,7 +18,6 @@ Si tu utilises des APIs externes, configure aussi:
 - `GEMINI_API_KEY` (Bubo Brain)
 - `BUBO_NEWSAPI_KEY` (news)
 - `BUBO_FINNHUB_KEY` (news)
-- `BUBO_REDDIT_ENABLED` (`0` recommande)
 - `BUBO_STOCKTWITS_BASE_URL` (social, optionnel)
 - `BUBO_STOCKTWITS_TEST_SYMBOL` (diagnostic UI, optionnel)
 - `BUBO_PAPER_WEBHOOK` (alertes paper)

@@ -114,7 +114,6 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
       BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
-      BUBO_REDDIT_ENABLED: ${BUBO_REDDIT_ENABLED:-0}
       BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
       BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
@@ -210,7 +209,6 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
       BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
-      BUBO_REDDIT_ENABLED: ${BUBO_REDDIT_ENABLED:-0}
       BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
       BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
@@ -382,14 +380,12 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `GEMINI_API_KEY` | Cle Gemini pour `bubo_brain.py` | Non (requise seulement si feature utilisee) | Cle API Google Gemini ou vide | vide |
 | `BUBO_NEWSAPI_KEY` | Cle NewsAPI pour sentiment news | Non (requise pour news) | Cle API ou vide | vide |
 | `BUBO_FINNHUB_KEY` | Cle Finnhub pour events/news feed | Non (requise pour Finnhub) | Cle API ou vide | vide |
-| `BUBO_REDDIT_ENABLED` | Active la collecte Reddit sociale | Non | `0` (recommande), `1` (experimental) | `0` |
 | `BUBO_STOCKTWITS_BASE_URL` | Base URL Stocktwits (collecte sociale + diagnostic UI) | Non | URL HTTP(S) | `https://api.stocktwits.com/api/2` |
 | `BUBO_STOCKTWITS_TEST_SYMBOL` | Symbole teste par le diagnostic UI Stocktwits | Non | Symbole action (ex: `AAPL`, `LMT`, `RTX`) | `AAPL` |
 
 Notes compatibilite:
 - Le code accepte aussi `NEWSAPI_KEY` en alternative a `BUBO_NEWSAPI_KEY`.
 - Le code accepte aussi `FINNHUB_KEY` en alternative a `BUBO_FINNHUB_KEY`.
-- Le code accepte aussi `REDDIT_ENABLED` en alternative a `BUBO_REDDIT_ENABLED`.
 - Le code accepte aussi `STOCKTWITS_BASE_URL` et `STOCKTWITS_TEST_SYMBOL` en alternatives a `BUBO_STOCKTWITS_*`.
 - Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur renvoie `NO_DECISION` (aucun trade).
 - Au demarrage, le log affiche les modeles Gemini utilises et `max_output_tokens`.
