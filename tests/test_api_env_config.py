@@ -78,12 +78,37 @@ class ApiEnvConfigTests(unittest.TestCase):
         finally:
             self._restore_env(old)
 
-    def test_social_config_reddit_disabled_by_default(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg_path = Path(tmp) / "social_config.json"
-            cfg_path.write_text("{}", encoding="utf-8")
-            cfg = load_config(str(cfg_path))
-            self.assertFalse(cfg.reddit_enabled)
+    def test_social_config_reddit_enabled_by_default(self):
+        old = self._swap_env(
+            {
+                "BUBO_REDDIT_ENABLED": None,
+                "REDDIT_ENABLED": None,
+            }
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg_path = Path(tmp) / "social_config.json"
+                cfg_path.write_text("{}", encoding="utf-8")
+                cfg = load_config(str(cfg_path))
+                self.assertTrue(cfg.reddit_enabled)
+        finally:
+            self._restore_env(old)
+
+    def test_social_config_reddit_can_be_disabled_from_env(self):
+        old = self._swap_env(
+            {
+                "BUBO_REDDIT_ENABLED": "0",
+                "REDDIT_ENABLED": None,
+            }
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg_path = Path(tmp) / "social_config.json"
+                cfg_path.write_text("{}", encoding="utf-8")
+                cfg = load_config(str(cfg_path))
+                self.assertFalse(cfg.reddit_enabled)
+        finally:
+            self._restore_env(old)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 {
-  "reddit_enabled": false,
+  "reddit_enabled": true,
   "reddit_client_id": "YOUR_REDDIT_CLIENT_ID",
   "reddit_client_secret": "YOUR_REDDIT_CLIENT_SECRET",
   "reddit_user_agent": "Bubo/1.0 (Trading sentiment bot)",

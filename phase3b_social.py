@@ -46,7 +46,7 @@ import pandas as pd
 @dataclass
 class SocialConfig:
     """Configuration pour la collecte sociale."""
-    reddit_enabled: bool = False
+    reddit_enabled: bool = True
     # Reddit API (GRATUIT — https://www.reddit.com/prefs/apps)
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
@@ -154,6 +154,7 @@ def _clean_text(value: str, max_len: int = 0) -> str:
 def generate_config_template(path: str = "social_config.json"):
     """Génère un fichier template pour les clés API."""
     template = {
+        "reddit_enabled": True,
         "reddit_client_id": "",
         "reddit_client_secret": "",
         "reddit_user_agent": "Bubo/1.0 by u/YOUR_REDDIT_USERNAME",
@@ -200,6 +201,10 @@ def load_config(path: str = "social_config.json") -> SocialConfig:
             if str(val).strip():
                 setattr(cfg, attr, str(val).strip())
                 break
+
+    raw_reddit_enabled = os.environ.get("BUBO_REDDIT_ENABLED", os.environ.get("REDDIT_ENABLED", ""))
+    if str(raw_reddit_enabled).strip():
+        cfg.reddit_enabled = str(raw_reddit_enabled).strip().lower() in {"1", "true", "yes", "on"}
 
     return cfg
 

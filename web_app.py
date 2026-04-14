@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, deque
 from datetime import datetime
@@ -63,6 +64,10 @@ if not STOCKTWITS_BASE_URL:
 STOCKTWITS_TEST_SYMBOL = str(
     os.getenv("BUBO_STOCKTWITS_TEST_SYMBOL", os.getenv("STOCKTWITS_TEST_SYMBOL", "AAPL")) or "AAPL"
 ).strip().upper() or "AAPL"
+REDDIT_TEST_SUBREDDIT = str(os.getenv("BUBO_REDDIT_TEST_SUBREDDIT", "stocks") or "stocks").strip() or "stocks"
+REDDIT_TEST_QUERY = str(os.getenv("BUBO_REDDIT_TEST_QUERY", STOCKTWITS_TEST_SYMBOL) or STOCKTWITS_TEST_SYMBOL).strip()
+if not REDDIT_TEST_QUERY:
+    REDDIT_TEST_QUERY = STOCKTWITS_TEST_SYMBOL
 
 _CONNECTIVITY_CACHE_LOCK = threading.Lock()
 _CONNECTIVITY_CACHE: dict[str, Any] = {
@@ -1292,6 +1297,104 @@ def _check_stocktwits() -> dict[str, Any]:
     )
 
 
+def _check_reddit_public() -> dict[str, Any]:
+    subreddit = REDDIT_TEST_SUBREDDIT
+    query = REDDIT_TEST_QUERY
+    encoded_query = urllib.parse.quote(query, safe="")
+    probe_url = (
+        f"https://www.reddit.com/r/{subreddit}/search.json"
+        f"?q={encoded_query}&sort=new&restrict_sr=1&limit=5&t=week"
+    )
+    started = time.perf_counter()
+    req = urllib.request.Request(
+        probe_url,
+        headers={
+            "User-Agent": "Bubo/1.0 connectivity-check",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            status = int(getattr(resp, "status", 200) or 200)
+            body = resp.read()
+    except urllib.error.HTTPError as e:
+        latency = int((time.perf_counter() - started) * 1000)
+        status = int(getattr(e, "code", 0) or 0)
+        if status == 429:
+            return _service_row(
+                "reddit_public",
+                "Reddit (fallback public)",
+                "warning",
+                f"Rate limit (HTTP 429) sur r/{subreddit}",
+                required=False,
+                latency_ms=latency,
+                details={"subreddit": subreddit, "query": query},
+            )
+        if status == 403:
+            return _service_row(
+                "reddit_public",
+                "Reddit (fallback public)",
+                "warning",
+                f"HTTP 403 sur r/{subreddit} (blocage temporaire probable)",
+                required=False,
+                latency_ms=latency,
+                details={"subreddit": subreddit, "query": query},
+            )
+        return _service_row(
+            "reddit_public",
+            "Reddit (fallback public)",
+            "warning",
+            f"HTTP {status} sur r/{subreddit}",
+            required=False,
+            latency_ms=latency,
+            details={"subreddit": subreddit, "query": query},
+        )
+    except Exception as e:
+        latency = int((time.perf_counter() - started) * 1000)
+        return _service_row(
+            "reddit_public",
+            "Reddit (fallback public)",
+            "warning",
+            f"Erreur reseau: {e}",
+            required=False,
+            latency_ms=latency,
+            details={"subreddit": subreddit, "query": query},
+        )
+
+    latency = int((time.perf_counter() - started) * 1000)
+    payload: dict[str, Any] | None = None
+    try:
+        decoded = json.loads(body.decode("utf-8"))
+        if isinstance(decoded, dict):
+            payload = decoded
+    except Exception:
+        payload = None
+
+    if status == 200 and isinstance(payload, dict):
+        children = payload.get("data", {}).get("children", [])
+        posts_count = len(children) if isinstance(children, list) else 0
+        return _service_row(
+            "reddit_public",
+            "Reddit (fallback public)",
+            "ok",
+            f"Fallback public OK (r/{subreddit}, {posts_count} posts)",
+            required=False,
+            latency_ms=latency,
+            details={"subreddit": subreddit, "query": query},
+        )
+
+    return _service_row(
+        "reddit_public",
+        "Reddit (fallback public)",
+        "warning",
+        f"Reponse non-JSON (HTTP {status}) sur r/{subreddit}",
+        required=False,
+        latency_ms=latency,
+        details={"subreddit": subreddit, "query": query},
+    )
+
+
 def _ib_connect_probe(host: str, port: int, client_id: int) -> tuple[bool, str]:
     _ensure_asyncio_event_loop()
 
@@ -1373,6 +1476,8 @@ def _connectivity_signature(cfg: dict[str, Any]) -> str:
         "ibkr_host": str(cfg.get("ibkr_host", "")),
         "ibkr_port": int(cfg.get("ibkr_port", 0) or 0),
         "ibkr_client_id": int(cfg.get("ibkr_client_id", 0) or 0),
+        "reddit_test_subreddit": REDDIT_TEST_SUBREDDIT,
+        "reddit_test_query": REDDIT_TEST_QUERY,
         "stocktwits_base_url": STOCKTWITS_BASE_URL,
         "stocktwits_test_symbol": STOCKTWITS_TEST_SYMBOL,
     }
@@ -1384,6 +1489,7 @@ def _compute_connectivity_report(cfg: dict[str, Any]) -> dict[str, Any]:
         _check_gemini(str(cfg.get("decision_engine", "llm"))),
         _check_newsapi(),
         _check_finnhub(),
+        _check_reddit_public(),
         _check_stocktwits(),
         _check_ib_gateway(cfg),
     ]
@@ -1431,6 +1537,8 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
                     "allow_short": cfg.get("allow_short"),
                     "ibkr_host": cfg.get("ibkr_host"),
                     "ibkr_port": cfg.get("ibkr_port"),
+                    "reddit_test_subreddit": REDDIT_TEST_SUBREDDIT,
+                    "reddit_test_query": REDDIT_TEST_QUERY,
                     "stocktwits_base_url": STOCKTWITS_BASE_URL,
                     "stocktwits_test_symbol": STOCKTWITS_TEST_SYMBOL,
                 },
@@ -1453,6 +1561,8 @@ def get_connectivity_report(overrides: dict[str, Any] | None = None, force: bool
             "allow_short": cfg.get("allow_short"),
             "ibkr_host": cfg.get("ibkr_host"),
             "ibkr_port": cfg.get("ibkr_port"),
+            "reddit_test_subreddit": REDDIT_TEST_SUBREDDIT,
+            "reddit_test_query": REDDIT_TEST_QUERY,
             "stocktwits_base_url": STOCKTWITS_BASE_URL,
             "stocktwits_test_symbol": STOCKTWITS_TEST_SYMBOL,
         },
