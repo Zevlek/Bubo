@@ -275,6 +275,21 @@ def _read_csv_rows(path: Path, limit: int = 200) -> list[dict[str, Any]]:
     return rows
 
 
+def _tail_file_lines(path: Path, tail: int) -> list[str]:
+    if tail <= 0 or not path.exists() or not path.is_file():
+        return []
+    out: deque[str] = deque(maxlen=tail)
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = str(raw).rstrip("\n")
+                if line:
+                    out.append(line)
+    except Exception:
+        return []
+    return list(out)
+
+
 def _read_jsonl_rows(path: Path, limit: int = 5000) -> list[dict[str, Any]]:
     if not path.exists() or not path.is_file():
         return []
@@ -1971,9 +1986,19 @@ def api_status():
 
 @app.get("/api/logs")
 def api_logs():
-    tail = _coerce_int(request.args.get("tail", 250), 250, minimum=10)
-    lines = list(_LOGS)[-tail:]
-    return jsonify({"lines": lines, "count": len(lines)})
+    tail = _coerce_int(request.args.get("tail", 1000), 1000, minimum=10)
+    tail = min(20000, tail)
+    memory_lines = list(_LOGS)
+    if memory_lines and tail <= len(memory_lines):
+        lines = memory_lines[-tail:]
+        source = "memory"
+    else:
+        lines = _tail_file_lines(RUNTIME_LOG_PATH, tail)
+        source = "file"
+        if not lines and memory_lines:
+            lines = memory_lines[-tail:]
+            source = "memory"
+    return jsonify({"lines": lines, "count": len(lines), "tail": tail, "source": source})
 
 
 @app.get("/api/files")

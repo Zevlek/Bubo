@@ -42,6 +42,7 @@ http://IP_DU_NAS:7654
 - Le bloc `Execution` montre surtout les actions (`surveillance`, `run once`, `stop`).
 - Les `Parametres` sont masques par defaut (bouton `Parametres`).
 - Le diagnostic API/IBKR est manuel et repliable (bouton `Verifier les API` puis `Masquer les API`).
+- Le panneau `Logs en direct` permet de choisir la profondeur (300 a 10 000 lignes), avec remontee depuis le log persistant.
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
 - Les noms d'instruments affiches sont resolves depuis IBKR (ContractDetails), sans fallback externe.
 - Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.

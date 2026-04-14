@@ -853,7 +853,15 @@
         <div class="toolbar">
           <h2>Logs en direct</h2>
           <div class="toolbar-right">
-            <small id="log-meta">300 lignes</small>
+            <label for="logs-tail">Lignes</label>
+            <select id="logs-tail" style="border:1px solid #c5d1da;border-radius:8px;padding:4px 6px;background:#fff;color:#173749;font-size:0.78rem;">
+              <option value="300">300</option>
+              <option value="1000" selected>1000</option>
+              <option value="3000">3000</option>
+              <option value="5000">5000</option>
+              <option value="10000">10000</option>
+            </select>
+            <small id="log-meta">1000 lignes</small>
             <label><input type="checkbox" id="log-autoscroll" checked> Défilement auto</label>
           </div>
         </div>
@@ -992,6 +1000,7 @@
     const marketHoursEl = document.getElementById("market-hours");
     const messageBoxEl = document.getElementById("message-box");
     const logAutoScrollEl = document.getElementById("log-autoscroll");
+    const logsTailEl = document.getElementById("logs-tail");
     const connectivityListEl = document.getElementById("connectivity-list");
     const connectivityMetaEl = document.getElementById("conn-meta");
     const connectivityPanelEl = document.getElementById("connectivity-panel");
@@ -1060,6 +1069,12 @@
       messageBoxEl.style.borderColor = error ? "#efb0a8" : "#d1dbe3";
       messageBoxEl.style.background = error ? "#fce9e6" : "#eff3f7";
       messageBoxEl.style.color = error ? "#8a2f23" : "#234052";
+    }
+
+    function getRequestedLogTail() {
+      const raw = Number(logsTailEl?.value || 1000);
+      const parsed = Number.isFinite(raw) ? Math.trunc(raw) : 1000;
+      return Math.max(10, Math.min(20000, parsed));
     }
 
     function escapeHtml(value) {
@@ -1450,12 +1465,14 @@
     }
 
     async function refreshLogs() {
-      const res = await fetch("/api/logs?tail=300");
+      const requestedTail = getRequestedLogTail();
+      const res = await fetch(`/api/logs?tail=${requestedTail}`);
       const data = await res.json();
       const nextText = (data.lines || []).join("\n");
       const prevTop = logsEl.scrollTop;
       const maxTop = Math.max(0, logsEl.scrollHeight - logsEl.clientHeight);
       const wasNearBottom = (maxTop - prevTop) < 16;
+      const source = String(data.source || "memoire");
       const selection = window.getSelection ? window.getSelection() : null;
       const hasSelectionInLogs = Boolean(
         selection &&
@@ -1478,7 +1495,7 @@
       } else {
         logsEl.scrollTop = prevTop;
       }
-      document.getElementById("log-meta").textContent = `${data.count || 0} lignes`;
+      document.getElementById("log-meta").textContent = `${data.count || 0} lignes (${source})`;
     }
 
     async function refreshFiles() {
@@ -1801,6 +1818,11 @@
         logsEl.scrollTop = logsEl.scrollHeight;
       }
     });
+    if (logsTailEl) {
+      logsTailEl.addEventListener("change", () => {
+        refreshLogs();
+      });
+    }
 
     refreshAll();
     setInterval(refreshAll, 3500);
