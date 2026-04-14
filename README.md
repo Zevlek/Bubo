@@ -63,6 +63,7 @@ http://IP_DU_NAS:7654
 - `data/logs/engine_cycle.jsonl`: resume de chaque cycle (decisions, statuts LLM, erreur cycle, metriques paper).
 - `data/logs/llm_calls.jsonl`: detail par ticker (decision, score, confiance, statut/modele/erreur LLM).
 - `data/logs/orders.jsonl`: executions et ordres skips (inclut les raisons IBKR).
+- `data/logs/web_runtime.log`: flux runtime UI + stdout/stderr moteur (tracebacks inclus, utile pour debug infra).
 - Le mode LLM est en **fail-closed**: si la reponse LLM est invalide/incomplete, le moteur passe en `NO_DECISION` (plus de `HOLD 50/0` silencieux).
 
 ## Build local (sans GHCR)

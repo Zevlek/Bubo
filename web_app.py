@@ -28,9 +28,11 @@ DATA_DIR = BASE_DIR / "data"
 CHARTS_DIR = BASE_DIR / "charts"
 LOGS_DIR = DATA_DIR / "logs"
 LLM_CALLS_LOG_PATH = LOGS_DIR / "llm_calls.jsonl"
+RUNTIME_LOG_PATH = LOGS_DIR / "web_runtime.log"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("BUBO_WEB_SECRET", "change-this-secret")
@@ -110,7 +112,14 @@ def _append_log(line: str):
     msg = line.rstrip("\n")
     if not msg:
         return
-    _LOGS.append(f"[{_now_text()}] {msg}")
+    entry = f"[{_now_text()}] {msg}"
+    _LOGS.append(entry)
+    try:
+        with RUNTIME_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+    except Exception:
+        # Runtime logging must never break the web process.
+        pass
 
 
 def _is_authenticated() -> bool:
@@ -1852,7 +1861,7 @@ def get_runtime_status() -> dict[str, Any]:
 
 def list_output_files(limit: int = 40) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    allowed = {".csv", ".json", ".md", ".png"}
+    allowed = {".csv", ".json", ".jsonl", ".md", ".png", ".log"}
     scan_roots = [("data", DATA_DIR), ("charts", CHARTS_DIR)]
 
     for scope, root in scan_roots:

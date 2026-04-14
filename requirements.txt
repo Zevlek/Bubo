@@ -7,3 +7,4 @@ requests>=2.31
 Flask>=3.0
 google-genai>=0.3
 ib_insync>=0.9.86
+tzdata>=2024.1
