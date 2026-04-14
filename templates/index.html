@@ -721,6 +721,8 @@
         </div>
         <div id="status-details" class="hint">Fuseau horaire: {{ timezone }}</div>
         <div id="market-hours" class="hint">MARCHÉ US : chargement...</div>
+        <div id="finbert-status" class="hint">FinBERT : chargement...</div>
+        <div id="gpu-status" class="hint">GPU : chargement...</div>
 
         <div class="actions">
           <button class="btn-main" id="btn-watch">Lancer la surveillance</button>
@@ -998,6 +1000,8 @@
     const runStateEl = document.getElementById("run-state");
     const statusDetailsEl = document.getElementById("status-details");
     const marketHoursEl = document.getElementById("market-hours");
+    const finbertStatusEl = document.getElementById("finbert-status");
+    const gpuStatusEl = document.getElementById("gpu-status");
     const messageBoxEl = document.getElementById("message-box");
     const logAutoScrollEl = document.getElementById("log-autoscroll");
     const logsTailEl = document.getElementById("logs-tail");
@@ -1123,6 +1127,68 @@
       if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
       if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
       return `${s}s`;
+    }
+
+    function finbertStateBadge(state) {
+      const st = String(state || "").toLowerCase();
+      if (st === "active") return '<span class="market-state open">ACTIF</span>';
+      if (st === "disabled") return '<span class="market-state closed">DÉSACTIVÉ</span>';
+      if (st === "idle") return '<span class="market-state">EN ATTENTE</span>';
+      if (st === "ready") return '<span class="market-state">PRÊT</span>';
+      return '<span class="market-state">N/A</span>';
+    }
+
+    function renderFinbertStatus(finbert) {
+      const fb = (finbert && typeof finbert === "object") ? finbert : {};
+      const state = finbertStateBadge(fb.state);
+      const msg = String(fb.message || "").trim();
+      const ticker = String(fb.last_ticker || "").trim();
+      const count = asNumber(fb.last_article_count, NaN);
+      const at = formatDateTimeParis(fb.last_event_at || "");
+      const age = asNumber(fb.last_event_age_s, NaN);
+      const bits = [];
+      if (msg) bits.push(escapeHtml(msg));
+      if (ticker) bits.push(`${escapeHtml(ticker)}${Number.isFinite(count) ? ` (${count} articles)` : ""}`);
+      if (at) {
+        bits.push(`Dernière analyse : ${escapeHtml(at)}${Number.isFinite(age) ? ` (il y a ${escapeHtml(formatDurationFr(age))})` : ""}`);
+      }
+      if (!bits.length) bits.push("Aucune analyse récente");
+      finbertStatusEl.innerHTML = `FinBERT : ${state}<br>${bits.join("<br>")}`;
+    }
+
+    function renderGpuStatus(gpu) {
+      const g = (gpu && typeof gpu === "object") ? gpu : {};
+      const detected = Boolean(g.detected);
+      const activity = Boolean(g.activity_now);
+      let badge = '<span class="market-state closed">NON DÉTECTÉ</span>';
+      if (detected && activity) badge = '<span class="market-state open">ACTIF</span>';
+      else if (detected) badge = '<span class="market-state">DÉTECTÉ</span>';
+
+      const devices = Array.isArray(g.devices) ? g.devices : [];
+      const names = devices
+        .map(d => String((d && d.name) || "").trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(", ");
+      const util = devices
+        .map(d => asNumber(d && d.utilization_gpu_pct, NaN))
+        .filter(v => Number.isFinite(v));
+      const used = devices
+        .map(d => asNumber(d && d.used_memory_mb, NaN))
+        .filter(v => Number.isFinite(v));
+      const total = devices
+        .map(d => asNumber(d && d.total_memory_mb, NaN))
+        .filter(v => Number.isFinite(v));
+
+      const details = [];
+      details.push(escapeHtml(String(g.message || "Statut GPU indisponible")));
+      if (names) details.push(`GPU : ${escapeHtml(names)}`);
+      if (util.length) details.push(`Utilisation : ${util.map(v => `${Math.round(v)}%`).join(" / ")}`);
+      if (used.length && total.length && used.length === total.length) {
+        details.push(`VRAM : ${used.map((v, i) => `${Math.round(v)}/${Math.round(total[i])} MB`).join(" / ")}`);
+      }
+      if (!details.length) details.push("Aucune donnée GPU");
+      gpuStatusEl.innerHTML = `GPU conteneur : ${badge}<br>${details.join("<br>")}`;
     }
 
     function formatDateTimeParis(value) {
@@ -1462,6 +1528,8 @@
           `Heure FR : ${escapeHtml(m.time_paris || "n/a")}${holiday}<br>` +
           `Réouverture (heure FR) : ${escapeHtml(openFr)} (dans ${formatDurationFr(m.seconds_to_open)})`;
       }
+      renderFinbertStatus(data.finbert || {});
+      renderGpuStatus(data.gpu || {});
     }
 
     async function refreshLogs() {

@@ -4,6 +4,7 @@ import csv
 import hmac
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -29,6 +30,7 @@ CHARTS_DIR = BASE_DIR / "charts"
 LOGS_DIR = DATA_DIR / "logs"
 LLM_CALLS_LOG_PATH = LOGS_DIR / "llm_calls.jsonl"
 RUNTIME_LOG_PATH = LOGS_DIR / "web_runtime.log"
+FINBERT_HISTORY_LOG_PATH = LOGS_DIR / "finbert_history.jsonl"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CHARTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,6 +78,17 @@ _CONNECTIVITY_CACHE: dict[str, Any] = {
     "signature": "",
     "timestamp": 0.0,
     "report": None,
+}
+
+try:
+    SYSTEM_STATUS_CACHE_TTL_S = max(5, int(os.getenv("BUBO_SYSTEM_STATUS_CACHE_TTL_S", "15")))
+except Exception:
+    SYSTEM_STATUS_CACHE_TTL_S = 15
+
+_SYSTEM_STATUS_CACHE_LOCK = threading.Lock()
+_SYSTEM_STATUS_CACHE: dict[str, Any] = {
+    "timestamp": 0.0,
+    "status": None,
 }
 
 try:
@@ -312,6 +325,216 @@ def _read_jsonl_rows(path: Path, limit: int = 5000) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             rows.append(item)
     return rows
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _current_engine_command() -> list[str]:
+    with _STATE_LOCK:
+        cmd = _RUN_STATE.get("command")
+        if isinstance(cmd, list):
+            return [str(x) for x in cmd]
+    return []
+
+
+def _is_finbert_enabled_runtime() -> bool | None:
+    cmd = _current_engine_command()
+    if not cmd:
+        return None
+    return "--no-finbert" not in cmd
+
+
+def _latest_finbert_snapshot() -> dict[str, Any]:
+    rows = _read_jsonl_rows(FINBERT_HISTORY_LOG_PATH, limit=300)
+    if not rows:
+        return {}
+    row = rows[-1] if isinstance(rows[-1], dict) else {}
+    if not isinstance(row, dict):
+        return {}
+    return {
+        "timestamp": str(row.get("timestamp", "") or "").strip(),
+        "ticker": str(row.get("ticker", "") or "").strip().upper(),
+        "article_count": _safe_int(row.get("article_count"), 0),
+        "sentiment_score": _safe_float_or_none(row.get("sentiment_score")),
+        "top_headline": str(row.get("top_headline", "") or "").strip(),
+    }
+
+
+def _collect_gpu_status() -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "detected": False,
+        "cuda_available": False,
+        "torch_installed": False,
+        "device_count": 0,
+        "devices": [],
+        "nvidia_smi_ok": False,
+        "nvidia_visible_devices": str(os.getenv("NVIDIA_VISIBLE_DEVICES", "") or "").strip(),
+        "activity_now": False,
+        "message": "GPU non detecte dans le conteneur",
+    }
+
+    try:
+        import torch  # type: ignore
+
+        out["torch_installed"] = True
+        cuda_ok = bool(torch.cuda.is_available())
+        out["cuda_available"] = cuda_ok
+        if cuda_ok:
+            count = int(torch.cuda.device_count() or 0)
+            out["device_count"] = count
+            devices = []
+            for idx in range(count):
+                try:
+                    props = torch.cuda.get_device_properties(idx)
+                    devices.append(
+                        {
+                            "index": idx,
+                            "name": str(getattr(props, "name", f"GPU {idx}") or f"GPU {idx}"),
+                            "total_memory_mb": int((float(getattr(props, "total_memory", 0.0)) / 1024.0 / 1024.0)),
+                        }
+                    )
+                except Exception:
+                    devices.append({"index": idx, "name": f"GPU {idx}", "total_memory_mb": 0})
+            out["devices"] = devices
+    except Exception:
+        pass
+
+    smi_bin = shutil.which("nvidia-smi")
+    if smi_bin:
+        try:
+            cmd = [
+                smi_bin,
+                "--query-gpu=name,driver_version,memory.total,memory.used,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ]
+            proc = subprocess.run(
+                cmd,
+                cwd=str(BASE_DIR),
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            if int(proc.returncode) == 0:
+                out["nvidia_smi_ok"] = True
+                parsed_devices: list[dict[str, Any]] = []
+                for idx, raw_line in enumerate(str(proc.stdout or "").splitlines()):
+                    parts = [p.strip() for p in raw_line.split(",")]
+                    if len(parts) < 5:
+                        continue
+                    try:
+                        used_mb = int(float(parts[3]))
+                    except Exception:
+                        used_mb = 0
+                    try:
+                        util_pct = int(float(parts[4]))
+                    except Exception:
+                        util_pct = 0
+                    parsed_devices.append(
+                        {
+                            "index": idx,
+                            "name": parts[0],
+                            "driver_version": parts[1],
+                            "total_memory_mb": _safe_int(parts[2], 0),
+                            "used_memory_mb": used_mb,
+                            "utilization_gpu_pct": util_pct,
+                        }
+                    )
+                if parsed_devices:
+                    out["devices"] = parsed_devices
+                    out["device_count"] = len(parsed_devices)
+                    out["detected"] = True
+                    out["activity_now"] = any(
+                        (_safe_int(d.get("utilization_gpu_pct"), 0) > 0)
+                        or (_safe_int(d.get("used_memory_mb"), 0) > 512)
+                        for d in parsed_devices
+                    )
+        except Exception:
+            pass
+
+    if out["cuda_available"] and _safe_int(out.get("device_count"), 0) > 0:
+        out["detected"] = True
+    if out["detected"]:
+        if out.get("activity_now"):
+            out["message"] = "GPU detecte et active maintenant"
+        else:
+            out["message"] = "GPU detecte (peut etre idle entre deux analyses)"
+    return out
+
+
+def _collect_finbert_status(running: bool) -> dict[str, Any]:
+    cfg = get_default_config()
+    cfg_enabled = not bool(cfg.get("no_finbert", True))
+    runtime_enabled = _is_finbert_enabled_runtime()
+    latest = _latest_finbert_snapshot()
+    ts = latest.get("timestamp", "")
+    parsed_ts = _parse_ts(ts)
+    age_s = None
+    if parsed_ts is not None:
+        try:
+            age_s = max(0, int((datetime.now(parsed_ts.tzinfo) - parsed_ts).total_seconds()))
+        except Exception:
+            age_s = None
+
+    enabled_effective = bool(runtime_enabled) if runtime_enabled is not None else bool(cfg_enabled)
+    has_recent_activity = bool(age_s is not None and age_s <= 7200)
+    if not enabled_effective:
+        state = "disabled"
+        message = "FinBERT desactive"
+    elif has_recent_activity:
+        state = "active"
+        message = "FinBERT actif"
+    elif running:
+        state = "idle"
+        message = "FinBERT actif mais en attente de cycle"
+    else:
+        state = "ready"
+        message = "FinBERT pret (moteur arrete)"
+
+    return {
+        "state": state,
+        "message": message,
+        "enabled_config": bool(cfg_enabled),
+        "enabled_runtime": runtime_enabled,
+        "has_recent_activity": has_recent_activity,
+        "last_event_at": str(ts or ""),
+        "last_event_age_s": age_s,
+        "last_ticker": str(latest.get("ticker", "") or ""),
+        "last_article_count": _safe_int(latest.get("article_count"), 0),
+        "last_sentiment_score": _safe_float_or_none(latest.get("sentiment_score")),
+        "history_file": "data/logs/finbert_history.jsonl",
+    }
+
+
+def _get_system_status(running: bool, force: bool = False) -> dict[str, Any]:
+    now = time.time()
+    with _SYSTEM_STATUS_CACHE_LOCK:
+        cached = _SYSTEM_STATUS_CACHE.get("status")
+        cached_ts = float(_SYSTEM_STATUS_CACHE.get("timestamp") or 0.0)
+        if (
+            (not force)
+            and isinstance(cached, dict)
+            and (now - cached_ts) < float(SYSTEM_STATUS_CACHE_TTL_S)
+        ):
+            return cached
+
+    status = {
+        "generated_at": _now_text(),
+        "gpu": _collect_gpu_status(),
+        "finbert": _collect_finbert_status(running=running),
+    }
+    with _SYSTEM_STATUS_CACHE_LOCK:
+        _SYSTEM_STATUS_CACHE["timestamp"] = now
+        _SYSTEM_STATUS_CACHE["status"] = status
+    return status
 
 
 def _paper_report_paths_from_state(state_path: Path) -> dict[str, Path]:
@@ -1806,6 +2029,9 @@ def _stream_process_output(proc: subprocess.Popen[str], mode: str):
                 _RUN_STATE["started_at"] = None
                 _RUN_STATE["last_exit_code"] = rc
                 _RUN_STATE["last_finished_at"] = _now_text()
+        with _SYSTEM_STATUS_CACHE_LOCK:
+            _SYSTEM_STATUS_CACHE["timestamp"] = 0.0
+            _SYSTEM_STATUS_CACHE["status"] = None
 
 
 def start_process(mode: str, overrides: dict[str, Any] | None = None) -> tuple[bool, str, list[str] | None]:
@@ -1839,6 +2065,9 @@ def start_process(mode: str, overrides: dict[str, Any] | None = None) -> tuple[b
 
         _append_log(f"Started mode={mode} with config: {cfg}")
         _append_log("Command: " + " ".join(cmd))
+        with _SYSTEM_STATUS_CACHE_LOCK:
+            _SYSTEM_STATUS_CACHE["timestamp"] = 0.0
+            _SYSTEM_STATUS_CACHE["status"] = None
         t = threading.Thread(target=_stream_process_output, args=(proc, mode), daemon=True)
         t.start()
         return True, "Processus lance.", cmd
@@ -1854,11 +2083,17 @@ def stop_process() -> tuple[bool, str]:
         proc.terminate()
         proc.wait(timeout=10)
         _append_log("Process terminated by user request.")
+        with _SYSTEM_STATUS_CACHE_LOCK:
+            _SYSTEM_STATUS_CACHE["timestamp"] = 0.0
+            _SYSTEM_STATUS_CACHE["status"] = None
         return True, "Processus arrete."
     except Exception:
         try:
             proc.kill()
             _append_log("Process killed after terminate timeout.")
+            with _SYSTEM_STATUS_CACHE_LOCK:
+                _SYSTEM_STATUS_CACHE["timestamp"] = 0.0
+                _SYSTEM_STATUS_CACHE["status"] = None
             return True, "Processus force a s'arreter."
         except Exception as e:
             return False, f"Impossible d'arreter le processus: {e}"
@@ -1870,7 +2105,7 @@ def get_runtime_status() -> dict[str, Any]:
         running = proc is not None and proc.poll() is None
         started_epoch = _RUN_STATE.get("started_epoch")
         uptime_s = int(time.time() - started_epoch) if running and started_epoch else 0
-        return {
+        payload = {
             "running": running,
             "mode": _RUN_STATE.get("mode"),
             "pid": proc.pid if running else None,
@@ -1881,6 +2116,11 @@ def get_runtime_status() -> dict[str, Any]:
             "last_finished_at": _RUN_STATE.get("last_finished_at"),
             "us_market": get_us_market_clock(),
         }
+    system_status = _get_system_status(running=running, force=False)
+    payload["finbert"] = system_status.get("finbert", {})
+    payload["gpu"] = system_status.get("gpu", {})
+    payload["system_status_generated_at"] = system_status.get("generated_at")
+    return payload
 
 
 def list_output_files(limit: int = 40) -> list[dict[str, Any]]:
