@@ -46,6 +46,7 @@ import pandas as pd
 @dataclass
 class SocialConfig:
     """Configuration pour la collecte sociale."""
+    reddit_enabled: bool = False
     # Reddit API (GRATUIT — https://www.reddit.com/prefs/apps)
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
@@ -199,6 +200,10 @@ def load_config(path: str = "social_config.json") -> SocialConfig:
             if str(val).strip():
                 setattr(cfg, attr, str(val).strip())
                 break
+
+    raw_reddit_enabled = os.environ.get("BUBO_REDDIT_ENABLED", os.environ.get("REDDIT_ENABLED", ""))
+    if str(raw_reddit_enabled).strip():
+        cfg.reddit_enabled = str(raw_reddit_enabled).strip().lower() in {"1", "true", "yes", "on"}
 
     return cfg
 
@@ -862,7 +867,9 @@ class SocialPipeline:
         self.cache = SocialCache()
 
         print("\n🌐 Initialisation Social Pipeline...")
-        self.reddit = RedditFetcher(self.cfg)
+        self.reddit = RedditFetcher(self.cfg) if self.cfg.reddit_enabled else None
+        if not self.cfg.reddit_enabled:
+            print("  ℹ️  Reddit désactivé — Stocktwits uniquement")
         self.stocktwits = StocktwitsFetcher(self.cfg)
         self.sentiment = SocialSentimentEngine(self.cfg, finbert_analyzer)
         self.scorer = SocialScorer(self.cfg)
@@ -871,16 +878,17 @@ class SocialPipeline:
         print(f"\n  📱 Social: {ticker}")
         all_posts = []
 
-        # Reddit
-        cached = self.cache.get("reddit", ticker, self.cfg.cache_ttl_minutes)
-        if cached is not None:
-            print(f"    📦 Reddit: {len(cached)} posts (cache)")
-            all_posts.extend(cached)
-        else:
-            reddit_posts = self.reddit.fetch(ticker)
-            print(f"    🟠 Reddit: {len(reddit_posts)} posts")
-            self.cache.set("reddit", ticker, reddit_posts)
-            all_posts.extend(reddit_posts)
+        # Reddit (optionnel, désactivé par défaut)
+        if self.cfg.reddit_enabled and self.reddit is not None:
+            cached = self.cache.get("reddit", ticker, self.cfg.cache_ttl_minutes)
+            if cached is not None:
+                print(f"    📦 Reddit: {len(cached)} posts (cache)")
+                all_posts.extend(cached)
+            else:
+                reddit_posts = self.reddit.fetch(ticker)
+                print(f"    🟠 Reddit: {len(reddit_posts)} posts")
+                self.cache.set("reddit", ticker, reddit_posts)
+                all_posts.extend(reddit_posts)
 
         # Stocktwits
         cached = self.cache.get("stocktwits", ticker, self.cfg.cache_ttl_minutes)
@@ -986,11 +994,10 @@ def main():
         generate_config_template()
         print()
 
-    if not cfg.reddit_client_id:
-        print("┌────────────────────────────────────────────────────────────┐")
-        print("│  💡 Reddit API = GRATUIT. 2 min de setup = 10x + de data  │")
-        print("│     Instructions dans social_config.json                  │")
-        print("└────────────────────────────────────────────────────────────┘\n")
+    if cfg.reddit_enabled and not cfg.reddit_client_id:
+        print("⚠️  Reddit activé sans credentials: fallback public (instable)")
+    elif not cfg.reddit_enabled:
+        print("ℹ️  Reddit désactivé: pipeline social basé sur Stocktwits uniquement")
 
     tickers = ["AM.PA", "AIR.PA", "LMT", "RTX"]
 

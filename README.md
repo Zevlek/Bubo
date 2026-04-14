@@ -114,9 +114,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
       BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
-      BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
-      BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
-      BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_REDDIT_ENABLED: ${BUBO_REDDIT_ENABLED:-0}
       BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
       BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
@@ -212,9 +210,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       BUBO_NEWSAPI_KEY: ${BUBO_NEWSAPI_KEY:-}
       BUBO_FINNHUB_KEY: ${BUBO_FINNHUB_KEY:-}
-      BUBO_REDDIT_CLIENT_ID: ${BUBO_REDDIT_CLIENT_ID:-}
-      BUBO_REDDIT_CLIENT_SECRET: ${BUBO_REDDIT_CLIENT_SECRET:-}
-      BUBO_REDDIT_USER_AGENT: ${BUBO_REDDIT_USER_AGENT:-}
+      BUBO_REDDIT_ENABLED: ${BUBO_REDDIT_ENABLED:-0}
       BUBO_STOCKTWITS_BASE_URL: ${BUBO_STOCKTWITS_BASE_URL:-https://api.stocktwits.com/api/2}
       BUBO_STOCKTWITS_TEST_SYMBOL: ${BUBO_STOCKTWITS_TEST_SYMBOL:-AAPL}
       BUBO_DECISION_ENGINE: ${BUBO_DECISION_ENGINE:-llm}
@@ -325,7 +321,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | Variable | Utilite | Obligatoire | Valeurs possibles | Defaut |
 | --- | --- | --- | --- | --- |
 | `TZ` | Fuseau horaire du container | Non | Ex: `Europe/Paris`, `UTC` | `Europe/Paris` |
-| `INSTALL_AI_DEPS` | Installe les deps IA lourdes optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers/praw) | `0` |
+| `INSTALL_AI_DEPS` | Installe les deps IA lourdes optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers) | `0` |
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
 | `DOCKER_CONFIG_FILE` | Fichier `config.json` Docker utilise par Watchtower pour l'auth registry | Requis si image privee (GHCR) | Chemin absolu vers `config.json` (ex: `/root/.docker/config.json`) | `/root/.docker/config.json` |
 | `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
@@ -386,16 +382,14 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `GEMINI_API_KEY` | Cle Gemini pour `bubo_brain.py` | Non (requise seulement si feature utilisee) | Cle API Google Gemini ou vide | vide |
 | `BUBO_NEWSAPI_KEY` | Cle NewsAPI pour sentiment news | Non (requise pour news) | Cle API ou vide | vide |
 | `BUBO_FINNHUB_KEY` | Cle Finnhub pour events/news feed | Non (requise pour Finnhub) | Cle API ou vide | vide |
-| `BUBO_REDDIT_CLIENT_ID` | Reddit API client id | Non (requis avec les 2 autres Reddit pour social) | Valeur OAuth Reddit ou vide | vide |
-| `BUBO_REDDIT_CLIENT_SECRET` | Reddit API client secret | Non (requis avec les 2 autres Reddit pour social) | Valeur OAuth Reddit ou vide | vide |
-| `BUBO_REDDIT_USER_AGENT` | Reddit API user-agent | Non (requis avec les 2 autres Reddit pour social) | Ex: `Bubo/1.0 by u/USERNAME` | vide dans compose / exemple rempli dans `.env.example` |
+| `BUBO_REDDIT_ENABLED` | Active la collecte Reddit sociale | Non | `0` (recommande), `1` (experimental) | `0` |
 | `BUBO_STOCKTWITS_BASE_URL` | Base URL Stocktwits (collecte sociale + diagnostic UI) | Non | URL HTTP(S) | `https://api.stocktwits.com/api/2` |
 | `BUBO_STOCKTWITS_TEST_SYMBOL` | Symbole teste par le diagnostic UI Stocktwits | Non | Symbole action (ex: `AAPL`, `LMT`, `RTX`) | `AAPL` |
 
 Notes compatibilite:
 - Le code accepte aussi `NEWSAPI_KEY` en alternative a `BUBO_NEWSAPI_KEY`.
 - Le code accepte aussi `FINNHUB_KEY` en alternative a `BUBO_FINNHUB_KEY`.
-- Le code accepte aussi `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` / `REDDIT_USER_AGENT` en alternatives aux variables `BUBO_*`.
+- Le code accepte aussi `REDDIT_ENABLED` en alternative a `BUBO_REDDIT_ENABLED`.
 - Le code accepte aussi `STOCKTWITS_BASE_URL` et `STOCKTWITS_TEST_SYMBOL` en alternatives a `BUBO_STOCKTWITS_*`.
 - Si `BUBO_DECISION_ENGINE=llm` et que Gemini est indisponible (cle/API), le moteur renvoie `NO_DECISION` (aucun trade).
 - Au demarrage, le log affiche les modeles Gemini utilises et `max_output_tokens`.
@@ -430,7 +424,7 @@ docker compose --profile ibkr up -d
 Notes:
 - L'image `ib-gateway` est lancee en sidecar (meme network Docker que BUBO).
 - `ib_insync` et `google-genai` sont installes par defaut dans l'image (pas besoin de `INSTALL_AI_DEPS=1` pour IBKR/LLM).
-- Active `INSTALL_AI_DEPS=1` seulement si tu veux les modules lourds (`torch`/`transformers`) et `praw`.
+- Active `INSTALL_AI_DEPS=1` seulement si tu veux les modules lourds (`torch`/`transformers`).
 - Si tu utilises `docker-compose.ghcr.yml`, fais `docker compose -f docker-compose.ghcr.yml --profile ibkr up -d`.
 - Si tu utilises TWS/IB Gateway externe (hors Docker), garde `BUBO_PAPER_BROKER=ibkr` et remplace `BUBO_IBKR_HOST`/`BUBO_IBKR_PORT` par l'hote/port reel.
 - si la connexion IBKR echoue, BUBO bascule automatiquement en mode `local` pour ne pas bloquer le cycle.

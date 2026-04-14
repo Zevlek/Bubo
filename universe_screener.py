@@ -155,7 +155,7 @@ class APIBudgetConfig:
     watch_interval_min: int = 15
     stocktwits_req_per_hour: int = 200
     stocktwits_req_per_ticker: int = 1
-    reddit_req_per_ticker: int = 1
+    reddit_req_per_ticker: int = 0
     utilization: float = 0.80
     hard_cap_tickers: int = 50
 

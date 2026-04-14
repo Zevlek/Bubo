@@ -1222,45 +1222,6 @@ def _check_finnhub() -> dict[str, Any]:
     return _service_row("finnhub", "Finnhub", "error", message, latency_ms=latency)
 
 
-def _check_reddit() -> dict[str, Any]:
-    client_id = _first_env("BUBO_REDDIT_CLIENT_ID", "REDDIT_CLIENT_ID")
-    client_secret = _first_env("BUBO_REDDIT_CLIENT_SECRET", "REDDIT_CLIENT_SECRET")
-    user_agent = _first_env("BUBO_REDDIT_USER_AGENT", "REDDIT_USER_AGENT") or "Bubo/1.0 connectivity-check"
-
-    if client_id and client_secret:
-        try:
-            import praw  # type: ignore
-        except Exception as e:
-            return _service_row("reddit", "Reddit", "error", f"praw indisponible: {e}", required=False)
-
-        started = time.perf_counter()
-        try:
-            reddit = praw.Reddit(
-                client_id=client_id,
-                client_secret=client_secret,
-                user_agent=user_agent,
-            )
-            _ = reddit.subreddit("stocks").display_name
-            latency = int((time.perf_counter() - started) * 1000)
-            return _service_row("reddit", "Reddit", "ok", "OAuth Reddit OK", latency_ms=latency)
-        except Exception as e:
-            latency = int((time.perf_counter() - started) * 1000)
-            return _service_row("reddit", "Reddit", "error", f"OAuth echec: {e}", latency_ms=latency)
-
-    status, _payload, err, latency = _http_get_json(
-        "https://www.reddit.com/r/stocks/about.json",
-        headers={"User-Agent": user_agent},
-        timeout_s=4.0,
-    )
-    if err:
-        return _service_row("reddit", "Reddit", "warning", f"Mode public indisponible: {err}", latency_ms=latency)
-    if status == 200:
-        return _service_row("reddit", "Reddit", "warning", "OAuth non configuree (fallback public actif)", latency_ms=latency)
-    if status == 429:
-        return _service_row("reddit", "Reddit", "warning", "Rate limit Reddit (HTTP 429)", latency_ms=latency)
-    return _service_row("reddit", "Reddit", "warning", f"OAuth non configuree, fallback HTTP {status}", latency_ms=latency)
-
-
 def _check_stocktwits() -> dict[str, Any]:
     probe_url = f"{STOCKTWITS_BASE_URL}/streams/symbol/{STOCKTWITS_TEST_SYMBOL}.json"
     started = time.perf_counter()
@@ -1423,7 +1384,6 @@ def _compute_connectivity_report(cfg: dict[str, Any]) -> dict[str, Any]:
         _check_gemini(str(cfg.get("decision_engine", "llm"))),
         _check_newsapi(),
         _check_finnhub(),
-        _check_reddit(),
         _check_stocktwits(),
         _check_ib_gateway(cfg),
     ]

@@ -1,4 +1,3 @@
 transformers>=4.41
 torch>=2.2
 sentencepiece>=0.1.99
-praw>=7.7
