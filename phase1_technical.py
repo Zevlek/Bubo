@@ -92,7 +92,8 @@ class MarketDataFetcher:
                 period=params["period"],
                 interval=params["interval"],
                 progress=False,
-                auto_adjust=True
+                auto_adjust=True,
+                threads=False,  # more stable in long-running watch loops
             )
 
             if df.empty:

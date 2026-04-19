@@ -17,6 +17,7 @@ Usage:
 import sys
 import os
 import time
+import gc
 import argparse
 import warnings
 import json
@@ -1737,6 +1738,246 @@ def _append_jsonl(path: Path, payload: dict):
         pass
 
 
+def _is_too_many_open_files_error(err: Exception) -> bool:
+    if isinstance(err, OSError) and getattr(err, "errno", None) == 24:
+        return True
+    txt = str(err or "").lower()
+    return ("too many open files" in txt) or ("errno 24" in txt)
+
+
+def _load_dynamic_universe(path: str | Path,
+                           cache: dict | None = None,
+                           strict_us: bool = True) -> tuple[list[str], dict, str]:
+    """
+    Reload universe file only when it changes.
+    If FD pressure appears, fallback to last successful universe snapshot.
+    """
+    state = dict(cache or {})
+    p = Path(path)
+    cached_universe = list(state.get("universe", []) or [])
+    cached_mtime_ns = state.get("mtime_ns")
+    warning = ""
+
+    mtime_ns = None
+    try:
+        mtime_ns = p.stat().st_mtime_ns
+    except Exception:
+        # Keep trying: load_universe will provide the precise error if needed.
+        mtime_ns = None
+
+    if cached_universe and (mtime_ns is not None) and (cached_mtime_ns == mtime_ns):
+        return cached_universe, state, warning
+
+    try:
+        universe = load_universe(p, strict_us=strict_us)
+    except Exception as e:
+        if cached_universe and _is_too_many_open_files_error(e):
+            warning = (
+                f"Universe reload skipped ({e}); reusing cached list ({len(cached_universe)} tickers)"
+            )
+            return cached_universe, state, warning
+        raise
+
+    state = {
+        "path": str(p),
+        "mtime_ns": mtime_ns,
+        "loaded_at": _paper_now(),
+        "universe": list(universe),
+    }
+    return universe, state, warning
+
+
+def _recommended_universe_refresh_min(watch_interval_min: int) -> int:
+    """
+    Conservative defaults:
+    - very fast watch loops should not rescreen universe every minute
+    """
+    interval = max(1, int(watch_interval_min))
+    if interval <= 2:
+        return 15
+    if interval <= 5:
+        return 10
+    return interval
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_BUBO_TZ)
+    return dt
+
+
+def _safe_int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _default_universe_health_state() -> dict:
+    return {
+        "updated_at": _paper_now(),
+        "tickers": {},
+    }
+
+
+def _load_universe_health(path: Path) -> dict:
+    state = _default_universe_health_state()
+    try:
+        if not path.exists():
+            return state
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return state
+
+    if not isinstance(payload, dict):
+        return state
+    raw_tickers = payload.get("tickers", {})
+    if not isinstance(raw_tickers, dict):
+        return state
+
+    clean_tickers: dict[str, dict] = {}
+    for raw_ticker, raw_info in raw_tickers.items():
+        ticker = str(raw_ticker or "").strip().upper()
+        if not ticker or not isinstance(raw_info, dict):
+            continue
+        clean_tickers[ticker] = {
+            "fail_streak": _safe_int_value(raw_info.get("fail_streak", 0), 0),
+            "total_fail": _safe_int_value(raw_info.get("total_fail", 0), 0),
+            "total_ok": _safe_int_value(raw_info.get("total_ok", 0), 0),
+            "last_fail": str(raw_info.get("last_fail", "") or ""),
+            "last_ok": str(raw_info.get("last_ok", "") or ""),
+            "muted_until": str(raw_info.get("muted_until", "") or ""),
+        }
+    state["tickers"] = clean_tickers
+    state["updated_at"] = str(payload.get("updated_at", state["updated_at"]))
+    return state
+
+
+def _save_universe_health(path: Path, state: dict):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        # Health registry is best-effort.
+        pass
+
+
+def _is_universe_ticker_muted(record: dict, now_dt: datetime) -> bool:
+    muted_until = _parse_iso_datetime(record.get("muted_until"))
+    return bool(muted_until is not None and muted_until > now_dt)
+
+
+def _cleanup_universe_health(state: dict, now_dt: datetime, max_age_days: int):
+    tickers = state.get("tickers", {})
+    if not isinstance(tickers, dict):
+        state["tickers"] = {}
+        return
+
+    cutoff = now_dt - timedelta(days=max(7, int(max_age_days)))
+    keep: dict[str, dict] = {}
+    for ticker, record in tickers.items():
+        if not isinstance(record, dict):
+            continue
+        if _is_universe_ticker_muted(record, now_dt):
+            keep[ticker] = record
+            continue
+        last_seen = _parse_iso_datetime(record.get("last_ok")) or _parse_iso_datetime(record.get("last_fail"))
+        if last_seen is None or last_seen >= cutoff:
+            keep[ticker] = record
+    state["tickers"] = keep
+
+
+def _apply_universe_health_filter(universe: list[str],
+                                  state: dict,
+                                  max_deep: int,
+                                  now_dt: datetime) -> tuple[list[str], int, int]:
+    tickers = state.get("tickers", {})
+    if not isinstance(tickers, dict) or not universe:
+        return list(universe), 0, 0
+
+    muted = {
+        tk for tk in universe
+        if _is_universe_ticker_muted(tickers.get(tk, {}), now_dt)
+    }
+    muted_active = len(muted)
+    if not muted:
+        return list(universe), 0, muted_active
+
+    filtered = [tk for tk in universe if tk not in muted]
+    min_keep = max(10, int(max_deep))
+    if len(filtered) < min_keep:
+        # Guard: never over-prune a small universe.
+        return list(universe), 0, muted_active
+    return filtered, len(muted), muted_active
+
+
+def _update_universe_health(state: dict,
+                            successes: set[str],
+                            failures: set[str],
+                            now_dt: datetime,
+                            fail_streak_to_mute: int,
+                            mute_hours: int) -> dict:
+    tickers = state.get("tickers", {})
+    if not isinstance(tickers, dict):
+        tickers = {}
+        state["tickers"] = tickers
+
+    now_txt = now_dt.isoformat(timespec="seconds")
+    fail_streak_to_mute = max(2, int(fail_streak_to_mute))
+    mute_hours = max(1, int(mute_hours))
+
+    success_only = set(str(tk).strip().upper() for tk in successes if str(tk).strip())
+    fail_only = set(str(tk).strip().upper() for tk in failures if str(tk).strip()) - success_only
+
+    newly_muted = 0
+
+    for tk in success_only:
+        rec = tickers.get(tk, {})
+        if not isinstance(rec, dict):
+            rec = {}
+        rec["fail_streak"] = 0
+        rec["total_ok"] = _safe_int_value(rec.get("total_ok", 0), 0) + 1
+        rec["last_ok"] = now_txt
+        rec["muted_until"] = ""
+        tickers[tk] = rec
+
+    for tk in fail_only:
+        rec = tickers.get(tk, {})
+        if not isinstance(rec, dict):
+            rec = {}
+        was_muted = _is_universe_ticker_muted(rec, now_dt)
+        streak = _safe_int_value(rec.get("fail_streak", 0), 0) + 1
+        rec["fail_streak"] = streak
+        rec["total_fail"] = _safe_int_value(rec.get("total_fail", 0), 0) + 1
+        rec["last_fail"] = now_txt
+        if streak >= fail_streak_to_mute:
+            muted_until_dt = now_dt + timedelta(hours=mute_hours)
+            rec["muted_until"] = muted_until_dt.isoformat(timespec="seconds")
+            if not was_muted:
+                newly_muted += 1
+        tickers[tk] = rec
+
+    active_muted = sum(
+        1
+        for rec in tickers.values()
+        if isinstance(rec, dict) and _is_universe_ticker_muted(rec, now_dt)
+    )
+    state["updated_at"] = now_txt
+    return {
+        "health_success_cycle": len(success_only),
+        "health_fail_cycle": len(fail_only),
+        "health_newly_muted": int(newly_muted),
+        "health_muted_active": int(active_muted),
+    }
+
+
 def _extract_ibkr_warning_event(warning: str) -> dict | None:
     text = str(warning or "").strip()
     if not text.startswith("IBKR "):
@@ -1945,7 +2186,24 @@ class IBKRPaperAdapter:
         self.cfg = cfg
         self._ib = None
 
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.disconnect()
+        return False
+
+    def __del__(self):
+        # Best-effort safety net if a cycle exits unexpectedly before explicit disconnect.
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+
     def connect(self):
+        if self._ib is not None:
+            self.disconnect()
         try:
             from ib_insync import IB  # type: ignore
         except Exception as e:
@@ -2975,13 +3233,29 @@ def build_deep_analysis_list(cfg: EngineConfig,
             continue
         universe_clean.append(tk)
 
+    health_path = Path(str(os.getenv("BUBO_UNIVERSE_HEALTH_FILE", "data/universe_health.json")).strip() or "data/universe_health.json")
+    fail_streak_to_mute = max(2, int(os.getenv("BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE", "3")))
+    mute_hours = max(1, int(os.getenv("BUBO_UNIVERSE_MUTE_HOURS", "24")))
+    health_max_age_days = max(7, int(os.getenv("BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS", "45")))
+    health_state = _load_universe_health(health_path)
+    now_dt = _now_dt()
+    _cleanup_universe_health(health_state, now_dt=now_dt, max_age_days=health_max_age_days)
+    universe_effective, health_muted_filtered, health_muted_active = _apply_universe_health_filter(
+        universe_clean,
+        state=health_state,
+        max_deep=max_deep,
+        now_dt=now_dt,
+    )
+
     if not MODULES.get("screener"):
-        shortlist = list(universe_clean)[:max(1, max_deep)]
+        shortlist = list(universe_effective)[:max(1, max_deep)]
         return shortlist, pd.DataFrame({"ticker": shortlist}), {
             "warning": "screener unavailable",
             "requested": max_deep,
             "allowed": len(shortlist),
             "invalid_filtered": invalid_count,
+            "health_muted_filtered": int(health_muted_filtered),
+            "health_muted_active": int(health_muted_active),
         }
 
     screener = UniverseScreener(
@@ -2990,9 +3264,27 @@ def build_deep_analysis_list(cfg: EngineConfig,
             top_n=max(1, preselect_top),
         )
     )
-    ranked = screener.screen(universe_clean, top_n=max(1, preselect_top))
+    ranked = screener.screen(universe_effective, top_n=max(1, preselect_top))
+    health_stats = _update_universe_health(
+        state=health_state,
+        successes=set(getattr(screener, "last_successes", set()) or set()),
+        failures=set(getattr(screener, "last_failures", set()) or set()),
+        now_dt=_now_dt(),
+        fail_streak_to_mute=fail_streak_to_mute,
+        mute_hours=mute_hours,
+    )
+    _cleanup_universe_health(health_state, now_dt=_now_dt(), max_age_days=health_max_age_days)
+    _save_universe_health(health_path, health_state)
+
     if ranked.empty:
-        return [], ranked, {"requested": max_deep, "allowed": 0, "invalid_filtered": invalid_count}
+        return [], ranked, {
+            "requested": max_deep,
+            "allowed": 0,
+            "invalid_filtered": invalid_count,
+            "health_muted_filtered": int(health_muted_filtered),
+            "health_muted_active": int(health_muted_active),
+            **health_stats,
+        }
 
     if use_budget_gate:
         budget = APIBudgetManager(
@@ -3007,11 +3299,18 @@ def build_deep_analysis_list(cfg: EngineConfig,
             "dropped": max(0, len(ranked) - len(selected)),
             "budget_cap": len(selected),
             "invalid_filtered": invalid_count,
+            "health_muted_filtered": int(health_muted_filtered),
+            "health_muted_active": int(health_muted_active),
         }
 
     tickers = selected["ticker"].astype(str).tolist() if not selected.empty else []
     if "invalid_filtered" not in meta:
         meta["invalid_filtered"] = invalid_count
+    if "health_muted_filtered" not in meta:
+        meta["health_muted_filtered"] = int(health_muted_filtered)
+    if "health_muted_active" not in meta:
+        meta["health_muted_active"] = int(health_muted_active)
+    meta.update(health_stats)
     return tickers, selected, meta
 
 
@@ -3254,6 +3553,17 @@ def main():
     elif args.watch:
         engine = ScoringEngine(cfg)
         dynamic_universe = bool(args.universe_file and MODULES.get("screener"))
+        universe_cache: dict = {}
+        watch_error_streak = 0
+        default_universe_refresh_min = _recommended_universe_refresh_min(cfg.watch_interval_min)
+        universe_refresh_min = max(
+            1,
+            int(os.getenv("BUBO_UNIVERSE_REFRESH_MIN", str(default_universe_refresh_min))),
+        )
+        last_universe_refresh_ts = 0.0
+        last_universe: list[str] = []
+        last_selected: list[str] = []
+        last_meta: dict[str, Any] = {}
         print(f"\n  Mode surveillance — refresh {cfg.watch_interval_min}min")
         if cfg.us_market_only:
             print("  Session US only: actif (09:30-16:00 ET, feries US standards inclus)")
@@ -3263,6 +3573,7 @@ def main():
                 print("  Hors session US: cycles en pause complete")
         if dynamic_universe:
             print("  Universe dynamique actif: prescreen relance a chaque cycle")
+            print(f"  Universe refresh throttle: {universe_refresh_min}min (env BUBO_UNIVERSE_REFRESH_MIN)")
         print(f"  Ctrl+C pour arrêter\n")
         while True:
             try:
@@ -3296,18 +3607,42 @@ def main():
 
                 dynamic_info = ""
                 universe_count = None
+                universe_warning = ""
                 if dynamic_universe:
-                    universe = load_universe(args.universe_file, strict_us=True)
-                    universe_count = len(universe)
-                    selected, shortlist_df, meta = build_deep_analysis_list(
-                        cfg=cfg,
-                        universe=universe,
-                        preselect_top=args.preselect_top,
-                        max_deep=args.max_deep,
-                        use_budget_gate=not args.no_budget_gate,
+                    now_epoch = time.time()
+                    refresh_due = (
+                        (not last_universe)
+                        or ((now_epoch - last_universe_refresh_ts) >= (universe_refresh_min * 60))
                     )
-                    if not shortlist_df.empty:
-                        shortlist_df.to_csv("data/universe_shortlist_latest.csv", index=False)
+                    refresh_label = "fresh"
+
+                    if refresh_due:
+                        universe, universe_cache, universe_warning = _load_dynamic_universe(
+                            args.universe_file,
+                            cache=universe_cache,
+                            strict_us=True,
+                        )
+                        universe_count = len(universe)
+                        selected, shortlist_df, meta = build_deep_analysis_list(
+                            cfg=cfg,
+                            universe=universe,
+                            preselect_top=args.preselect_top,
+                            max_deep=args.max_deep,
+                            use_budget_gate=not args.no_budget_gate,
+                        )
+                        if not shortlist_df.empty:
+                            shortlist_df.to_csv("data/universe_shortlist_latest.csv", index=False)
+                        last_universe = list(universe)
+                        last_selected = list(selected)
+                        last_meta = dict(meta)
+                        last_universe_refresh_ts = now_epoch
+                    else:
+                        universe = list(last_universe)
+                        universe_count = len(universe)
+                        selected = list(last_selected)
+                        meta = dict(last_meta)
+                        mins_since = int(max(0.0, now_epoch - last_universe_refresh_ts) // 60)
+                        refresh_label = f"cached {mins_since}m"
 
                     selected_effective = list(selected)
                     forced_held = []
@@ -3325,7 +3660,10 @@ def main():
                         f"Universe={len(universe)} | Deep={len(engine.cfg.tickers)} "
                         f"| BudgetCap={meta.get('budget_cap', 'n/a')} "
                         f"| HeldIncluded={len(forced_held)} "
-                        f"| InvalidFiltered={meta.get('invalid_filtered', 0)}"
+                        f"| InvalidFiltered={meta.get('invalid_filtered', 0)} "
+                        f"| MutedFiltered={meta.get('health_muted_filtered', 0)} "
+                        f"| NewlyMuted={meta.get('health_newly_muted', 0)} "
+                        f"| Reload={refresh_label}"
                     )
 
                 os.system("cls" if os.name == "nt" else "clear")
@@ -3368,6 +3706,8 @@ def main():
 
                 if dynamic_info:
                     print(f"\n  {dynamic_info}")
+                if universe_warning:
+                    print(f"  ⚠️ {universe_warning}")
                 wait_s = cfg.watch_interval_min * 60
                 if cfg.us_market_only:
                     clock_after = get_us_market_clock()
@@ -3375,6 +3715,7 @@ def main():
                     if isinstance(to_close, int):
                         wait_s = max(5, min(wait_s, to_close))
                 print(f"\n  Prochain refresh: {format_duration_compact(wait_s)}")
+                watch_error_streak = 0
                 time.sleep(wait_s)
             except KeyboardInterrupt:
                 print("\n  👋 Arrêté.")
@@ -3389,7 +3730,13 @@ def main():
                     deep_size=None,
                     cycle_error=str(e),
                 )
-                time.sleep(min(60, cfg.watch_interval_min * 60))
+                watch_error_streak += 1
+                sleep_s = min(60, cfg.watch_interval_min * 60)
+                if _is_too_many_open_files_error(e):
+                    gc.collect()
+                    sleep_s = max(sleep_s, min(600, 60 * watch_error_streak))
+                    print("  Watch guard: FD pressure detected, GC cleanup + backoff.")
+                time.sleep(sleep_s)
 
     else:
         engine = ScoringEngine(cfg)

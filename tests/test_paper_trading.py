@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 
 import bubo_engine
@@ -311,6 +312,82 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertEqual(summary["actions"], [])
             self.assertTrue(any("IBKR unavailable" in w for w in summary.get("warnings", [])))
+
+    def test_dynamic_universe_cache_reused_on_fd_pressure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            universe_path = Path(tmp) / "u.txt"
+            universe_path.write_text("AAPL\nMSFT\n", encoding="utf-8")
+
+            initial, cache, warning = bubo_engine._load_dynamic_universe(
+                universe_path,
+                cache={},
+                strict_us=True,
+            )
+            self.assertEqual(initial, ["AAPL", "MSFT"])
+            self.assertEqual(warning, "")
+
+            original_loader = bubo_engine.load_universe
+            try:
+                def _fail_loader(_path, strict_us=False):
+                    raise OSError(24, "Too many open files")
+
+                bubo_engine.load_universe = _fail_loader
+                reused, cache2, warning2 = bubo_engine._load_dynamic_universe(
+                    universe_path,
+                    cache=cache,
+                    strict_us=True,
+                )
+            finally:
+                bubo_engine.load_universe = original_loader
+
+            self.assertEqual(reused, ["AAPL", "MSFT"])
+            self.assertEqual(cache2.get("universe"), ["AAPL", "MSFT"])
+            self.assertIn("reusing cached list", warning2)
+
+    def test_recommended_universe_refresh_min_for_fast_watch(self):
+        self.assertEqual(bubo_engine._recommended_universe_refresh_min(1), 15)
+        self.assertEqual(bubo_engine._recommended_universe_refresh_min(2), 15)
+        self.assertEqual(bubo_engine._recommended_universe_refresh_min(3), 10)
+        self.assertEqual(bubo_engine._recommended_universe_refresh_min(5), 10)
+        self.assertEqual(bubo_engine._recommended_universe_refresh_min(30), 30)
+
+    def test_universe_health_marks_repeated_failures_as_muted(self):
+        state = bubo_engine._default_universe_health_state()
+        now = bubo_engine._now_dt()
+        stats = {}
+        for i in range(3):
+            stats = bubo_engine._update_universe_health(
+                state=state,
+                successes=set(),
+                failures={"BAD1"},
+                now_dt=now + timedelta(minutes=i),
+                fail_streak_to_mute=3,
+                mute_hours=24,
+            )
+        rec = state["tickers"].get("BAD1", {})
+        self.assertEqual(int(rec.get("fail_streak", 0)), 3)
+        self.assertTrue(str(rec.get("muted_until", "")))
+        self.assertEqual(int(stats.get("health_newly_muted", 0)), 1)
+        self.assertTrue(bubo_engine._is_universe_ticker_muted(rec, now + timedelta(minutes=2)))
+
+    def test_universe_health_filter_excludes_muted_tickers_when_universe_large_enough(self):
+        state = bubo_engine._default_universe_health_state()
+        now = bubo_engine._now_dt()
+        future = (now + timedelta(hours=6)).isoformat(timespec="seconds")
+        state["tickers"]["BAD1"] = {"muted_until": future}
+        state["tickers"]["BAD2"] = {"muted_until": future}
+        universe = [f"TK{i:02d}" for i in range(10)] + ["BAD1", "BAD2"]
+        filtered, muted_filtered, muted_active = bubo_engine._apply_universe_health_filter(
+            universe=universe,
+            state=state,
+            max_deep=4,
+            now_dt=now,
+        )
+        self.assertEqual(muted_filtered, 2)
+        self.assertEqual(muted_active, 2)
+        self.assertEqual(len(filtered), len(universe) - 2)
+        self.assertNotIn("BAD1", filtered)
+        self.assertNotIn("BAD2", filtered)
 
     def test_notify_webhook_skips_when_no_actions(self):
         ok, reason = notify_paper_webhook(

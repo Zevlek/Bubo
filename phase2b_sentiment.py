@@ -321,8 +321,8 @@ class NewsFetcher:
                 "apiKey": NEWSAPI_KEY,
             }
 
-            resp = requests.get(url, params=params, timeout=10)
-            data = resp.json()
+            with requests.get(url, params=params, timeout=10) as resp:
+                data = resp.json()
 
             articles = []
             for item in data.get("articles", []):
@@ -363,8 +363,8 @@ class NewsFetcher:
                 "token": FINNHUB_KEY,
             }
 
-            resp = requests.get(url, params=params, timeout=10)
-            data = resp.json()
+            with requests.get(url, params=params, timeout=10) as resp:
+                data = resp.json()
 
             articles = []
             for item in data[:20] if isinstance(data, list) else []:

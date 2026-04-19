@@ -2099,6 +2099,11 @@ def _stream_process_output(proc: subprocess.Popen[str], mode: str):
             for line in proc.stdout:
                 _append_log(line)
     finally:
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
         rc = proc.wait()
         _append_log(f"Process mode={mode} finished with exit code {rc}")
         with _STATE_LOCK:

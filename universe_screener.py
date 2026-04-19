@@ -80,19 +80,28 @@ class UniverseScreener:
     def __init__(self, cfg: ScreenerConfig | None = None, fetcher: MarketDataFetcher | None = None):
         self.cfg = cfg or ScreenerConfig()
         self.fetcher = fetcher or MarketDataFetcher()
+        self.last_successes: set[str] = set()
+        self.last_failures: set[str] = set()
 
     def screen(self, tickers: Iterable[str], top_n: int | None = None) -> pd.DataFrame:
         rows = []
         top_n = top_n or self.cfg.top_n
+        self.last_successes = set()
+        self.last_failures = set()
 
         for ticker in tickers:
+            tk = str(ticker).strip().upper()
+            if not tk:
+                continue
             try:
-                df = self.fetcher.fetch(str(ticker), self.cfg.timeframe)
+                df = self.fetcher.fetch(tk, self.cfg.timeframe)
             except Exception:
                 df = None
 
             if df is None or len(df) < self.cfg.min_bars:
+                self.last_failures.add(tk)
                 continue
+            self.last_successes.add(tk)
 
             close = df["Close"]
             high = df["High"]
@@ -123,7 +132,7 @@ class UniverseScreener:
 
             rows.append(
                 {
-                    "ticker": ticker,
+                    "ticker": tk,
                     "screen_score": round(score, 3),
                     "abs_ret_1d_pct": round(abs_ret_1d_pct, 3),
                     "abs_ret_5d_pct": round(abs_ret_5d_pct, 3),
