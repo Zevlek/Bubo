@@ -1206,14 +1206,7 @@ def get_portfolio_snapshot(overrides: dict[str, Any] | None = None, force: bool 
     # if UI sends an incomplete/invalid IBKR config transiently, reuse last known
     # valid config (or defaults) so portfolio refresh works without requiring any
     # prior manual connectivity action.
-    needs_fallback = (
-        bool(ibkr.get("enabled", False))
-        and not bool(ibkr.get("ok", False))
-        and (
-            ("host/port" in str(ibkr.get("message", "") or "").strip().lower())
-            or (not _ibkr_cfg_is_complete(cfg))
-        )
-    )
+    needs_fallback = bool(ibkr.get("enabled", False)) and not bool(ibkr.get("ok", False))
     if needs_fallback:
         fallback_candidates: list[tuple[str, dict[str, Any]]] = []
         cached_cfg = _get_cached_portfolio_cfg()
