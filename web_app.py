@@ -727,10 +727,22 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def _ensure_asyncio_event_loop():
     # ib_insync requires an asyncio loop bound to the current thread.
+    # Flask request threads often do not have one (Python 3.12+).
     try:
-        asyncio.get_event_loop()
+        running = asyncio.get_running_loop()
+        if not running.is_closed():
+            return running
     except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        pass
+
+    try:
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError("Current event loop is closed")
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
 
 
 def _ibkr_snapshot_signature(cfg: dict[str, Any]) -> str:
@@ -791,12 +803,12 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
     if not host or port <= 0:
         return {"enabled": True, "ok": False, "message": "Host/port IBKR invalides"}
 
+    _ensure_asyncio_event_loop()
     try:
         from ib_insync import IB  # type: ignore
     except Exception as e:
         return {"enabled": True, "ok": False, "message": f"ib_insync indisponible: {e}"}
 
-    _ensure_asyncio_event_loop()
     ib = IB()
     started = time.perf_counter()
     try:
