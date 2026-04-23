@@ -83,6 +83,8 @@ class ScreenerConfig:
     w_abs_ret_5d: float = 0.8
     w_rvol: float = 12.0
     w_range: float = 1.5
+    w_vol_z: float = 4.0
+    w_vol_pctile: float = 0.25
 
 
 class UniverseScreener:
@@ -131,6 +133,20 @@ class UniverseScreener:
             else:
                 rvol = 1.0
 
+            vol_z20 = 0.0
+            vol_pctile_60 = 50.0
+            if not volume.empty:
+                v_now = float(volume.iloc[-1])
+                vol20 = pd.to_numeric(volume.tail(20), errors="coerce").dropna()
+                vol60 = pd.to_numeric(volume.tail(60), errors="coerce").dropna()
+                if len(vol20) >= 2:
+                    mean20 = float(vol20.mean())
+                    std20 = float(vol20.std(ddof=0))
+                    if std20 > 0:
+                        vol_z20 = float((v_now - mean20) / std20)
+                if len(vol60) >= 1:
+                    vol_pctile_60 = float((vol60 <= v_now).mean() * 100.0)
+
             range_14 = (high.tail(14) - low.tail(14)).mean() if len(df) >= 14 else (high - low).mean()
             range_pct = float(range_14 / c0 * 100) if c0 > 0 and pd.notna(range_14) else 0.0
 
@@ -139,6 +155,8 @@ class UniverseScreener:
                 + abs_ret_5d_pct * self.cfg.w_abs_ret_5d
                 + max(0.0, rvol - 1.0) * self.cfg.w_rvol
                 + range_pct * self.cfg.w_range
+                + max(0.0, vol_z20) * self.cfg.w_vol_z
+                + max(0.0, vol_pctile_60 - 80.0) * self.cfg.w_vol_pctile
             )
 
             rows.append(
@@ -148,6 +166,8 @@ class UniverseScreener:
                     "abs_ret_1d_pct": round(abs_ret_1d_pct, 3),
                     "abs_ret_5d_pct": round(abs_ret_5d_pct, 3),
                     "rvol": round(rvol, 3),
+                    "volume_z20": round(float(vol_z20), 3),
+                    "volume_pctile_60": round(float(vol_pctile_60), 2),
                     "range_pct": round(range_pct, 3),
                     "close": round(c0, 4),
                 }
@@ -161,6 +181,8 @@ class UniverseScreener:
                     "abs_ret_1d_pct",
                     "abs_ret_5d_pct",
                     "rvol",
+                    "volume_z20",
+                    "volume_pctile_60",
                     "range_pct",
                     "close",
                 ]

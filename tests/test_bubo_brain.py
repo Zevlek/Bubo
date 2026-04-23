@@ -10,7 +10,35 @@ class GeminiBrainTests(unittest.TestCase):
             "ticker": "AAPL",
             "name": "AAPL",
             "collected_at": "2026-04-10T12:00:00",
-            "technical": {},
+            "technical": {
+                "prix_actuel": 123.45,
+                "rendement_5j_pct": 2.1,
+                "rendement_20j_pct": 6.7,
+                "rsi": 58.0,
+                "macd": 1.2,
+                "macd_signal": 0.9,
+                "macd_histogram": 0.3,
+                "macd_cross": "bullish",
+                "bb_pct": 0.72,
+                "bb_lower": 111.0,
+                "bb_upper": 130.0,
+                "sma_20": 120.0,
+                "sma_50": 117.0,
+                "sma_200": 102.0,
+                "au_dessus_sma200": True,
+                "volume_ratio": 2.4,
+                "volume_spike": True,
+                "volume_anomaly_score": 78.0,
+                "volume_anomaly_label": "VERY_HIGH",
+                "volume_rvol_mean20": 2.1,
+                "volume_rvol_median20": 2.4,
+                "volume_zscore_20": 3.2,
+                "volume_robust_zscore_60": 4.8,
+                "volume_percentile_60": 99.0,
+                "atr_pct": 3.4,
+                "trend_up": True,
+                "trend_down": False,
+            },
             "events": {},
             "news": {},
             "social": {},
@@ -26,10 +54,11 @@ class GeminiBrainTests(unittest.TestCase):
             },
         }
         prompt = brain._build_prompt(payload)
-        self.assertIn("CONTRAINTES D'EXÉCUTION", prompt)
+        self.assertIn("CONTRAINTES", prompt)
         self.assertIn("Frais/ordre", prompt)
-        self.assertIn("Coût A/R estimé", prompt)
         self.assertIn("edge net", prompt)
+        self.assertIn("Volume anormal:", prompt)
+        self.assertIn("VERY_HIGH", prompt)
 
     def test_validate_autocompletes_non_critical_missing_fields(self):
         brain = GeminiBrain(api_key="")

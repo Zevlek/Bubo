@@ -97,6 +97,7 @@ L'univers 1000 est pense pour fonctionner avec l'entonnoir du moteur:
 - cadence watch `BUBO_WATCH_INTERVAL_MIN`,
 - budget gate API actif par defaut.
 - filtrage strict des symboles non actions US (`USD`, suffixes `.CVR`, etc.) avant analyse profonde.
+- les anomalies de volume robustes (z-score, percentile 60 barres, RVOL median) alimentent le prescreen ET sont transmises au prompt Gemini.
 
 ## Exemples docker-compose (qui marchent)
 

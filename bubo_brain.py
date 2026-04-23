@@ -295,6 +295,8 @@ class DataCollector:
                 return round(float(val), 4)
             return val
 
+        volume_features = self._compute_volume_anomaly_features(df)
+
         return {
             "prix_actuel": safe(row["Close"]),
             "rendement_5j_pct": safe(returns_5d),
@@ -313,9 +315,75 @@ class DataCollector:
             "au_dessus_sma200": bool(row["Close"] > row.get("sma_200", 0)) if pd.notna(row.get("sma_200")) else None,
             "volume_ratio": safe(row.get("volume_ratio", 1.0)),
             "volume_spike": bool(row.get("volume_spike", False)),
+            "volume_rvol_mean20": safe(volume_features.get("volume_rvol_mean20")),
+            "volume_rvol_median20": safe(volume_features.get("volume_rvol_median20")),
+            "volume_zscore_20": safe(volume_features.get("volume_zscore_20")),
+            "volume_robust_zscore_60": safe(volume_features.get("volume_robust_zscore_60")),
+            "volume_percentile_60": safe(volume_features.get("volume_percentile_60")),
+            "volume_anomaly_score": safe(volume_features.get("volume_anomaly_score")),
+            "volume_anomaly_label": str(volume_features.get("volume_anomaly_label", "NORMAL")),
             "atr_pct": safe(row.get("atr_pct", 0)),
             "trend_up": bool(row.get("trend_up", False)),
             "trend_down": bool(row.get("trend_down", False)),
+        }
+
+    @staticmethod
+    def _compute_volume_anomaly_features(df: pd.DataFrame) -> dict:
+        volume = pd.to_numeric(df.get("Volume", pd.Series(dtype=float)), errors="coerce")
+        volume = volume.replace([np.inf, -np.inf], np.nan).dropna()
+        if volume.empty:
+            return {}
+
+        now_vol = float(volume.iloc[-1])
+        win20 = volume.tail(20)
+        win60 = volume.tail(60)
+
+        mean20 = float(win20.mean()) if not win20.empty else np.nan
+        median20 = float(win20.median()) if not win20.empty else np.nan
+        std20 = float(win20.std(ddof=0)) if len(win20) >= 2 else np.nan
+
+        rvol_mean20 = (now_vol / mean20) if pd.notna(mean20) and mean20 > 0 else np.nan
+        rvol_median20 = (now_vol / median20) if pd.notna(median20) and median20 > 0 else np.nan
+        z20 = ((now_vol - mean20) / std20) if pd.notna(std20) and std20 > 0 else np.nan
+
+        robust_z60 = np.nan
+        percentile60 = np.nan
+        if not win60.empty:
+            median60 = float(win60.median())
+            mad60 = float((win60 - median60).abs().median())
+            if mad60 > 0:
+                robust_z60 = 0.6745 * (now_vol - median60) / mad60
+            percentile60 = float((win60 <= now_vol).mean() * 100.0)
+
+        anomaly_score = 0.0
+        if pd.notna(rvol_median20):
+            anomaly_score += max(0.0, min(45.0, (float(rvol_median20) - 1.0) * 25.0))
+        if pd.notna(robust_z60):
+            anomaly_score += max(0.0, min(35.0, float(robust_z60) * 6.0))
+        if pd.notna(percentile60):
+            anomaly_score += max(0.0, min(20.0, float(percentile60) - 80.0))
+        anomaly_score = max(0.0, min(100.0, anomaly_score))
+
+        if anomaly_score >= 80:
+            label = "EXTREME"
+        elif anomaly_score >= 60:
+            label = "VERY_HIGH"
+        elif anomaly_score >= 40:
+            label = "HIGH"
+        elif anomaly_score >= 25:
+            label = "ELEVATED"
+        else:
+            label = "NORMAL"
+
+        return {
+            "volume_now": now_vol,
+            "volume_rvol_mean20": rvol_mean20,
+            "volume_rvol_median20": rvol_median20,
+            "volume_zscore_20": z20,
+            "volume_robust_zscore_60": robust_z60,
+            "volume_percentile_60": percentile60,
+            "volume_anomaly_score": anomaly_score,
+            "volume_anomaly_label": label,
         }
 
     def _collect_events(self, ticker: str) -> dict:
@@ -603,6 +671,13 @@ class GeminiBrain:
             parts.append(f"BB %B: {tech.get('bb_pct')} [{tech.get('bb_lower')} - {tech.get('bb_upper')}]")
             parts.append(f"SMA20: {tech.get('sma_20')} | SMA50: {tech.get('sma_50')} | SMA200: {tech.get('sma_200')} | >SMA200: {tech.get('au_dessus_sma200')}")
             parts.append(f"Volume: {tech.get('volume_ratio')}x (spike: {tech.get('volume_spike')}) | ATR%: {tech.get('atr_pct')} | Trend: {'UP' if tech.get('trend_up') else ('DOWN' if tech.get('trend_down') else 'FLAT')}")
+            parts.append(
+                "Volume anormal: "
+                f"score={tech.get('volume_anomaly_score')}/100 ({tech.get('volume_anomaly_label')}) | "
+                f"RVOL m20={tech.get('volume_rvol_mean20')}x | RVOL med20={tech.get('volume_rvol_median20')}x | "
+                f"z20={tech.get('volume_zscore_20')} | rz60={tech.get('volume_robust_zscore_60')} | "
+                f"p60={tech.get('volume_percentile_60')}%"
+            )
 
         # Events
         events = data.get("events", {})

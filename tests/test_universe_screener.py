@@ -64,6 +64,8 @@ class UniverseScreenerTests(unittest.TestCase):
         self.assertEqual(len(ranked), 2)
         self.assertEqual(ranked.iloc[0]["ticker"], "BBB")
         self.assertGreater(ranked.iloc[0]["screen_score"], ranked.iloc[1]["screen_score"])
+        self.assertIn("volume_z20", ranked.columns)
+        self.assertIn("volume_pctile_60", ranked.columns)
 
     def test_budget_manager_caps_selected_tickers(self):
         ranked = pd.DataFrame(
