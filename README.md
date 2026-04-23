@@ -390,6 +390,8 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_ANALYZE_WHEN_US_CLOSED` | Si marche US ferme: continue l'analyse (FinBERT/LLM), mais bloque les ordres | Non | `0` ou `1` | `1` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
 | `BUBO_ALLOW_SHORT` | Autorise les shorts (SELL d'ouverture) | Non | `0` ou `1` | `0` |
+| `BUBO_MAX_OPEN_POSITIONS` | Nombre maximal de positions ouvertes simultanement | Non | Entier `>= 1` | `6` |
+| `BUBO_MAX_TOTAL_EXPOSURE_PCT` | Exposition maximale globale du portefeuille (0 a 1) | Non | Nombre `0.05..1.0` (ex: `0.90`) | `0.90` |
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
 | `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |

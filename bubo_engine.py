@@ -149,8 +149,8 @@ class EngineConfig:
     initial_capital: float = 10000.0
     risk_gates_enabled: bool = True
     min_confidence_for_entry: float = 30.0
-    max_open_positions: int = 3
-    max_total_exposure_pct: float = 0.60
+    max_open_positions: int = 6
+    max_total_exposure_pct: float = 0.90
     rotation_enabled: bool = True
     rotation_min_edge: float = 12.0
     rotation_max_per_cycle: int = 1
@@ -3400,6 +3400,18 @@ def main():
         default=str(os.getenv("BUBO_ALLOW_SHORT", "0")).strip().lower() in {"1", "true", "yes", "on"},
         help="Autorise les positions short (SELL d'ouverture) en plus des positions longues.",
     )
+    parser.add_argument(
+        "--max-open-positions",
+        type=int,
+        default=int(os.getenv("BUBO_MAX_OPEN_POSITIONS", "6")),
+        help="Nombre maximal de positions ouvertes simultanement.",
+    )
+    parser.add_argument(
+        "--max-total-exposure-pct",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_TOTAL_EXPOSURE_PCT", "0.90")),
+        help="Exposition maximale du portefeuille (fraction de 0 a 1).",
+    )
     parser.add_argument("--paper", action="store_true",
                         help="Active le paper trading avec etat persistant")
     parser.add_argument("--paper-state", type=str, default="data/paper_portfolio_state.json",
@@ -3504,6 +3516,8 @@ def main():
     cfg.analyze_when_us_closed = bool(args.analyze_when_us_closed)
     cfg.use_finbert = not args.no_finbert
     cfg.allow_short = bool(args.allow_short)
+    cfg.max_open_positions = max(1, int(args.max_open_positions))
+    cfg.max_total_exposure_pct = max(0.05, min(1.0, float(args.max_total_exposure_pct)))
     cfg.decision_engine = _normalize_decision_engine(args.decision_engine)
     cfg.paper_broker = _normalize_paper_broker(args.paper_broker)
     cfg.ibkr_host = str(args.ibkr_host).strip() or "127.0.0.1"
