@@ -54,6 +54,7 @@ _RUN_STATE: dict[str, Any] = {
     "last_exit_code": None,
     "last_finished_at": None,
 }
+_RUN_MODES = {"once", "watch", "screen"}
 
 try:
     CONNECTIVITY_CACHE_TTL_S = max(10, int(os.getenv("BUBO_CONNECTIVITY_CACHE_TTL_S", "120")))
@@ -2039,8 +2040,18 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     return _apply_budget_mode(cfg)
 
 
+def _normalize_run_mode(value: Any, default: str = "watch") -> str:
+    mode = str(value or "").strip().lower()
+    if mode in _RUN_MODES:
+        return mode
+    fallback = str(default or "").strip().lower()
+    if fallback in _RUN_MODES:
+        return fallback
+    return "watch"
+
+
 def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> tuple[list[str], dict[str, Any]]:
-    if mode not in {"once", "watch", "screen"}:
+    if mode not in _RUN_MODES:
         raise ValueError(f"Unsupported mode: {mode}")
 
     cfg = _sanitize_config(overrides)
@@ -2417,6 +2428,42 @@ def api_stop():
     return jsonify({"ok": ok, "message": msg}), code
 
 
+def _get_autostart_settings() -> dict[str, Any]:
+    return {
+        "enabled": _env_bool("BUBO_AUTOSTART_ENABLED", False),
+        "mode": _normalize_run_mode(os.getenv("BUBO_AUTOSTART_MODE", "watch"), default="watch"),
+        "delay_s": _coerce_int(os.getenv("BUBO_AUTOSTART_DELAY_S", "5"), 5, minimum=0),
+    }
+
+
+def _run_autostart(mode: str, delay_s: int):
+    mode_norm = _normalize_run_mode(mode, default="watch")
+    delay = _coerce_int(delay_s, 0, minimum=0)
+    if delay > 0:
+        time.sleep(delay)
+    ok, msg, _cmd = start_process(mode_norm, None)
+    if ok:
+        _append_log(f"Autostart launched mode={mode_norm}.")
+    else:
+        _append_log(f"Autostart skipped: {msg}")
+
+
+def _trigger_autostart_if_enabled():
+    settings = _get_autostart_settings()
+    if not bool(settings.get("enabled")):
+        return
+    mode = _normalize_run_mode(settings.get("mode", "watch"), default="watch")
+    delay_s = _coerce_int(settings.get("delay_s", 5), 5, minimum=0)
+    _append_log(f"Autostart enabled (mode={mode}, delay={delay_s}s).")
+    t = threading.Thread(
+        target=_run_autostart,
+        args=(mode, delay_s),
+        daemon=True,
+        name="bubo-autostart",
+    )
+    t.start()
+
+
 def main():
     parser = argparse.ArgumentParser(description="BUBO Web Interface")
     parser.add_argument("--host", type=str, default="0.0.0.0")
@@ -2426,6 +2473,7 @@ def main():
     _append_log("BUBO web interface started.")
     if AUTH_ENABLED and AUTH_USER == "admin" and AUTH_PASSWORD == "change-me":
         _append_log("WARNING: default web credentials are active (admin/change-me). Update .env.")
+    _trigger_autostart_if_enabled()
     app.run(host=args.host, port=args.port, debug=False, threaded=True)
 
 

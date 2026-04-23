@@ -166,6 +166,9 @@ services:
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
+      BUBO_AUTOSTART_ENABLED: ${BUBO_AUTOSTART_ENABLED:-0}
+      BUBO_AUTOSTART_MODE: ${BUBO_AUTOSTART_MODE:-watch}
+      BUBO_AUTOSTART_DELAY_S: ${BUBO_AUTOSTART_DELAY_S:-5}
       BUBO_CONNECTIVITY_CACHE_TTL_S: ${BUBO_CONNECTIVITY_CACHE_TTL_S:-120}
       BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-60}
       BUBO_SYSTEM_STATUS_CACHE_TTL_S: ${BUBO_SYSTEM_STATUS_CACHE_TTL_S:-15}
@@ -272,6 +275,9 @@ services:
       BUBO_NO_FINBERT: ${BUBO_NO_FINBERT:-1}
       BUBO_NO_BUDGET_GATE: ${BUBO_NO_BUDGET_GATE:-0}
       BUBO_WEB_PORT: ${BUBO_WEB_PORT:-7654}
+      BUBO_AUTOSTART_ENABLED: ${BUBO_AUTOSTART_ENABLED:-0}
+      BUBO_AUTOSTART_MODE: ${BUBO_AUTOSTART_MODE:-watch}
+      BUBO_AUTOSTART_DELAY_S: ${BUBO_AUTOSTART_DELAY_S:-5}
       BUBO_CONNECTIVITY_CACHE_TTL_S: ${BUBO_CONNECTIVITY_CACHE_TTL_S:-120}
       BUBO_BROKER_SNAPSHOT_CACHE_TTL_S: ${BUBO_BROKER_SNAPSHOT_CACHE_TTL_S:-60}
       BUBO_SYSTEM_STATUS_CACHE_TTL_S: ${BUBO_SYSTEM_STATUS_CACHE_TTL_S:-15}
@@ -350,6 +356,9 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
 | `DOCKER_CONFIG_FILE` | Fichier `config.json` Docker utilise par Watchtower pour l'auth registry | Requis si image privee (GHCR) | Chemin absolu vers `config.json` (ex: `/root/.docker/config.json`) | `/root/.docker/config.json` |
 | `BUBO_WEB_PORT` | Port HTTP de l'UI | Non | Port TCP valide (ex: `7654`) | `7654` |
+| `BUBO_AUTOSTART_ENABLED` | Lance automatiquement un cycle moteur au demarrage du conteneur (utile apres reboot NAS/coupure) | Non | `0` ou `1` | `0` |
+| `BUBO_AUTOSTART_MODE` | Mode lance automatiquement si autostart actif | Non | `watch`, `once`, `screen` | `watch` |
+| `BUBO_AUTOSTART_DELAY_S` | Delai avant autostart pour laisser les services monter (IB Gateway, reseau) | Non | Entier `>= 0` (secondes) | `5` |
 | `BUBO_CONNECTIVITY_CACHE_TTL_S` | Cache du diagnostic connectivite API/IBKR dans l'UI | Non | Entier `>= 10` secondes | `120` |
 | `BUBO_BROKER_SNAPSHOT_CACHE_TTL_S` | Cache du snapshot portefeuille/compte IBKR dans l'UI | Non | Entier `>= 10` secondes | `60` |
 | `BUBO_SYSTEM_STATUS_CACHE_TTL_S` | Cache du statut technique FinBERT/GPU dans l'UI | Non | Entier `>= 5` secondes | `15` |

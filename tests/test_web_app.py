@@ -2,11 +2,18 @@ import unittest
 from unittest.mock import patch
 
 try:
-    from web_app import build_engine_command, get_connectivity_report
+    from web_app import (
+        _get_autostart_settings,
+        _run_autostart,
+        build_engine_command,
+        get_connectivity_report,
+    )
 except ModuleNotFoundError as exc:
     if exc.name == "flask":
         build_engine_command = None
         get_connectivity_report = None
+        _get_autostart_settings = None
+        _run_autostart = None
     else:
         raise
 
@@ -202,6 +209,45 @@ class WebAppTests(unittest.TestCase):
         self.assertFalse(first["cached"])
         self.assertFalse(second["cached"])
         self.assertEqual(compute_mock.call_count, 2)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "BUBO_AUTOSTART_ENABLED": "1",
+            "BUBO_AUTOSTART_MODE": "once",
+            "BUBO_AUTOSTART_DELAY_S": "12",
+        },
+        clear=False,
+    )
+    def test_autostart_settings_from_env(self):
+        cfg = _get_autostart_settings()
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["mode"], "once")
+        self.assertEqual(cfg["delay_s"], 12)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "BUBO_AUTOSTART_ENABLED": "1",
+            "BUBO_AUTOSTART_MODE": "invalid-mode",
+            "BUBO_AUTOSTART_DELAY_S": "-5",
+        },
+        clear=False,
+    )
+    def test_autostart_settings_invalid_values_are_sanitized(self):
+        cfg = _get_autostart_settings()
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["mode"], "watch")
+        self.assertEqual(cfg["delay_s"], 0)
+
+    @patch("web_app._append_log")
+    @patch("web_app.start_process")
+    @patch("web_app.time.sleep")
+    def test_run_autostart_respects_delay_and_starts_watch(self, sleep_mock, start_mock, _log_mock):
+        start_mock.return_value = (True, "started", ["/usr/bin/python", "bubo_engine.py", "--watch"])
+        _run_autostart("watch", 3)
+        sleep_mock.assert_called_once_with(3)
+        start_mock.assert_called_once_with("watch", None)
 
 
 if __name__ == "__main__":
