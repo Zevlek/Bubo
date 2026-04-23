@@ -138,6 +138,8 @@ services:
       BUBO_UNIVERSE_REFRESH_MIN: ${BUBO_UNIVERSE_REFRESH_MIN:-15}
       BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE: ${BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE:-3}
       BUBO_UNIVERSE_MUTE_HOURS: ${BUBO_UNIVERSE_MUTE_HOURS:-24}
+      BUBO_UNIVERSE_MUTE_MAX_HOURS: ${BUBO_UNIVERSE_MUTE_MAX_HOURS:-336}
+      BUBO_UNIVERSE_MUTE_BACKOFF: ${BUBO_UNIVERSE_MUTE_BACKOFF:-1}
       BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS: ${BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS:-45}
       BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
       BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-1}
@@ -242,6 +244,8 @@ services:
       BUBO_UNIVERSE_REFRESH_MIN: ${BUBO_UNIVERSE_REFRESH_MIN:-15}
       BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE: ${BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE:-3}
       BUBO_UNIVERSE_MUTE_HOURS: ${BUBO_UNIVERSE_MUTE_HOURS:-24}
+      BUBO_UNIVERSE_MUTE_MAX_HOURS: ${BUBO_UNIVERSE_MUTE_MAX_HOURS:-336}
+      BUBO_UNIVERSE_MUTE_BACKOFF: ${BUBO_UNIVERSE_MUTE_BACKOFF:-1}
       BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS: ${BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS:-45}
       BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
       BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-1}
@@ -369,6 +373,8 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_UNIVERSE_REFRESH_MIN` | Frequence de refresh du prescreen univers en mode watch (utilise cache entre deux refresh; recommande 10-15 min si watch=1-2 min) | Non | Entier `>= 1` (minutes) | `15` (auto 15 si watch<=2, 10 si watch<=5, sinon watch) |
 | `BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE` | Nombre d'echecs consecutifs avant de mettre un ticker en pause temporaire (delisted/inactif) | Non | Entier `>= 2` | `3` |
 | `BUBO_UNIVERSE_MUTE_HOURS` | Duree de pause d'un ticker apres depassement du seuil d'echecs | Non | Entier `>= 1` (heures) | `24` |
+| `BUBO_UNIVERSE_MUTE_MAX_HOURS` | Duree maximale de pause avec backoff (anti-retry infini sur ticker invalide) | Non | Entier `>= BUBO_UNIVERSE_MUTE_HOURS` | `336` |
+| `BUBO_UNIVERSE_MUTE_BACKOFF` | Active le backoff exponentiel de pause (24h, 48h, 96h...) apres echecs repetes | Non | `0` ou `1` | `1` |
 | `BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS` | Retention max des stats de sante ticker (nettoyage auto des entrees anciennes) | Non | Entier `>= 7` (jours) | `45` |
 | `BUBO_US_MARKET_ONLY` | En mode watch, n'execute les cycles que pendant la session reguliere US | Non | `0` ou `1` | `1` |
 | `BUBO_ANALYZE_WHEN_US_CLOSED` | Si marche US ferme: continue l'analyse (FinBERT/LLM), mais bloque les ordres | Non | `0` ou `1` | `1` |

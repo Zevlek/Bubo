@@ -31,6 +31,10 @@ _BLOCKED_SYMBOLS = {
     "AUD",
     "NZD",
     "CNH",
+    # Known synthetic/invalid symbols encountered in generated universes.
+    "XTSLA",
+    "SGAFT",
+    "MOGA",
 }
 _BLOCKED_SUFFIXES = (
     ".CVR",
@@ -41,10 +45,17 @@ _BLOCKED_SUFFIXES = (
     ".U",
     " WI",
 )
+_SYMBOL_ALIASES = {
+    "BRKB": "BRK.B",
+    "BRKA": "BRK.A",
+    "BFB": "BF.B",
+    "BFA": "BF.A",
+}
 
 
 def is_valid_us_equity_ticker(raw: object) -> bool:
     symbol = str(raw or "").replace("\ufeff", "").strip().upper()
+    symbol = _SYMBOL_ALIASES.get(symbol, symbol)
     if not symbol:
         return False
     if symbol in _BLOCKED_SYMBOLS:
@@ -213,7 +224,10 @@ def load_universe(path: str | Path, strict_us: bool = False) -> list[str]:
         raise FileNotFoundError(f"Universe file not found: {p}")
 
     def clean_symbol(raw: object) -> str:
-        return str(raw).replace("\ufeff", "").strip().upper()
+        symbol = str(raw).replace("\ufeff", "").strip().upper()
+        symbol = symbol.lstrip("$")
+        symbol = _SYMBOL_ALIASES.get(symbol, symbol)
+        return symbol
 
     if p.suffix.lower() == ".txt":
         tickers = [clean_symbol(line) for line in p.read_text(encoding="utf-8").splitlines() if clean_symbol(line)]

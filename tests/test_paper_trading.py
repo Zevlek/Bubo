@@ -332,9 +332,11 @@ class PaperTradingTests(unittest.TestCase):
                     raise OSError(24, "Too many open files")
 
                 bubo_engine.load_universe = _fail_loader
+                cache_stale = dict(cache)
+                cache_stale["mtime_ns"] = -1
                 reused, cache2, warning2 = bubo_engine._load_dynamic_universe(
                     universe_path,
-                    cache=cache,
+                    cache=cache_stale,
                     strict_us=True,
                 )
             finally:
@@ -370,6 +372,30 @@ class PaperTradingTests(unittest.TestCase):
         self.assertEqual(int(stats.get("health_newly_muted", 0)), 1)
         self.assertTrue(bubo_engine._is_universe_ticker_muted(rec, now + timedelta(minutes=2)))
 
+    def test_universe_health_backoff_extends_mute_window(self):
+        state = bubo_engine._default_universe_health_state()
+        now = bubo_engine._now_dt()
+
+        for i in range(5):
+            bubo_engine._update_universe_health(
+                state=state,
+                successes=set(),
+                failures={"BAD1"},
+                now_dt=now + timedelta(minutes=i),
+                fail_streak_to_mute=3,
+                mute_hours=24,
+                mute_max_hours=240,
+                use_backoff=True,
+            )
+
+        rec = state["tickers"].get("BAD1", {})
+        muted_until = bubo_engine._parse_iso_datetime(rec.get("muted_until"))
+        self.assertIsNotNone(muted_until)
+        # After 5th consecutive fail with threshold=3:
+        # backoff => 24h * 2^(5-3) = 96h
+        expected_min = now + timedelta(hours=95)
+        self.assertGreaterEqual(muted_until, expected_min)
+
     def test_universe_health_filter_excludes_muted_tickers_when_universe_large_enough(self):
         state = bubo_engine._default_universe_health_state()
         now = bubo_engine._now_dt()
@@ -388,6 +414,12 @@ class PaperTradingTests(unittest.TestCase):
         self.assertEqual(len(filtered), len(universe) - 2)
         self.assertNotIn("BAD1", filtered)
         self.assertNotIn("BAD2", filtered)
+
+    def test_extract_ibkr_warning_event_ignores_entry_gate_message(self):
+        parsed = bubo_engine._extract_ibkr_warning_event(
+            "IBKR entry gate: market closed; next open 2026-04-24 09:30:00"
+        )
+        self.assertIsNone(parsed)
 
     def test_notify_webhook_skips_when_no_actions(self):
         ok, reason = notify_paper_webhook(

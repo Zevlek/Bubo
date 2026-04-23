@@ -102,7 +102,7 @@ class UniverseScreenerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             txt = base / "u.txt"
-            txt.write_text("AAPL\nUSD\nHOLX.CVR\nBRK.B\nMSFT\n", encoding="utf-8")
+            txt.write_text("AAPL\nUSD\nHOLX.CVR\nBRKB\nXTSLA\nMSFT\n", encoding="utf-8")
             self.assertEqual(load_universe(txt, strict_us=True), ["AAPL", "BRK.B", "MSFT"])
 
 

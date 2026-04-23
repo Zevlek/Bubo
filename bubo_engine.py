@@ -1923,7 +1923,9 @@ def _update_universe_health(state: dict,
                             failures: set[str],
                             now_dt: datetime,
                             fail_streak_to_mute: int,
-                            mute_hours: int) -> dict:
+                            mute_hours: int,
+                            mute_max_hours: int | None = None,
+                            use_backoff: bool = True) -> dict:
     tickers = state.get("tickers", {})
     if not isinstance(tickers, dict):
         tickers = {}
@@ -1932,6 +1934,7 @@ def _update_universe_health(state: dict,
     now_txt = now_dt.isoformat(timespec="seconds")
     fail_streak_to_mute = max(2, int(fail_streak_to_mute))
     mute_hours = max(1, int(mute_hours))
+    mute_max_hours = max(mute_hours, int(mute_max_hours if mute_max_hours is not None else mute_hours))
 
     success_only = set(str(tk).strip().upper() for tk in successes if str(tk).strip())
     fail_only = set(str(tk).strip().upper() for tk in failures if str(tk).strip()) - success_only
@@ -1958,7 +1961,16 @@ def _update_universe_health(state: dict,
         rec["total_fail"] = _safe_int_value(rec.get("total_fail", 0), 0) + 1
         rec["last_fail"] = now_txt
         if streak >= fail_streak_to_mute:
-            muted_until_dt = now_dt + timedelta(hours=mute_hours)
+            mute_for_hours = mute_hours
+            if use_backoff:
+                backoff_steps = max(0, streak - fail_streak_to_mute)
+                if backoff_steps > 0:
+                    try:
+                        mute_for_hours = mute_hours * (2 ** min(8, backoff_steps))
+                    except Exception:
+                        mute_for_hours = mute_hours
+            mute_for_hours = max(mute_hours, min(int(mute_for_hours), int(mute_max_hours)))
+            muted_until_dt = now_dt + timedelta(hours=mute_for_hours)
             rec["muted_until"] = muted_until_dt.isoformat(timespec="seconds")
             if not was_muted:
                 newly_muted += 1
@@ -1986,6 +1998,8 @@ def _extract_ibkr_warning_event(warning: str) -> dict | None:
     if len(parts) < 3:
         return None
     side = parts[1].upper()
+    if side not in {"BUY", "SELL", "SHORT", "COVER"}:
+        return None
     ticker = parts[2].upper()
     reason = text
     status = "error"
@@ -2153,13 +2167,17 @@ def log_cycle_outputs(results: dict,
 
 
 def _latest_price(engine: ScoringEngine, ticker: str, cache: dict) -> float | None:
-    if ticker in cache:
-        return cache[ticker]
+    tk = str(ticker or "").strip().upper()
+    if tk in cache:
+        return cache[tk]
+    if not _is_strategy_ticker(tk):
+        cache[tk] = None
+        return None
 
     px = None
     try:
         if engine.fetcher:
-            df = engine.fetcher.fetch(ticker, engine.cfg.timeframe)
+            df = engine.fetcher.fetch(tk, engine.cfg.timeframe)
             if df is not None and not df.empty:
                 close = df.iloc[-1].get("Close", np.nan)
                 if pd.notna(close) and float(close) > 0:
@@ -2167,7 +2185,7 @@ def _latest_price(engine: ScoringEngine, ticker: str, cache: dict) -> float | No
     except Exception:
         px = None
 
-    cache[ticker] = px
+    cache[tk] = px
     return px
 
 
@@ -2626,7 +2644,25 @@ def run_paper_cycle(engine: ScoringEngine,
     signal_tickers = set(results.keys()) if results else set()
     held_tickers = set(positions.keys())
     all_tickers = sorted(signal_tickers | held_tickers)
-    prices = {tk: _latest_price(engine, tk, price_cache) for tk in all_tickers}
+    prices: dict[str, float | None] = {}
+    # With IBKR sync include-policy we already receive fresh market prices from broker.
+    # Reuse them first to avoid redundant yfinance requests (notably for non-standard symbols).
+    use_ibkr_synced_prices = (broker == "ibkr" and ibkr_positions_policy == "include")
+    if use_ibkr_synced_prices:
+        for tk in held_tickers:
+            pos_row = positions.get(tk, {})
+            if isinstance(pos_row, dict):
+                try:
+                    pos_px = float(pos_row.get("last_price", 0.0) or 0.0)
+                except Exception:
+                    pos_px = 0.0
+                if pos_px > 0:
+                    prices[tk] = pos_px
+                    price_cache[tk] = pos_px
+    for tk in all_tickers:
+        if tk in prices and isinstance(prices[tk], (int, float)) and float(prices[tk]) > 0:
+            continue
+        prices[tk] = _latest_price(engine, tk, price_cache)
 
     def _signed_shares(pos_row: dict[str, Any]) -> int:
         try:
@@ -3236,6 +3272,9 @@ def build_deep_analysis_list(cfg: EngineConfig,
     health_path = Path(str(os.getenv("BUBO_UNIVERSE_HEALTH_FILE", "data/universe_health.json")).strip() or "data/universe_health.json")
     fail_streak_to_mute = max(2, int(os.getenv("BUBO_UNIVERSE_FAIL_STREAK_TO_MUTE", "3")))
     mute_hours = max(1, int(os.getenv("BUBO_UNIVERSE_MUTE_HOURS", "24")))
+    mute_max_hours = max(mute_hours, int(os.getenv("BUBO_UNIVERSE_MUTE_MAX_HOURS", "336")))
+    mute_backoff_raw = str(os.getenv("BUBO_UNIVERSE_MUTE_BACKOFF", "1")).strip().lower()
+    mute_backoff_enabled = mute_backoff_raw not in {"0", "false", "no", "off"}
     health_max_age_days = max(7, int(os.getenv("BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS", "45")))
     health_state = _load_universe_health(health_path)
     now_dt = _now_dt()
@@ -3272,6 +3311,8 @@ def build_deep_analysis_list(cfg: EngineConfig,
         now_dt=_now_dt(),
         fail_streak_to_mute=fail_streak_to_mute,
         mute_hours=mute_hours,
+        mute_max_hours=mute_max_hours,
+        use_backoff=mute_backoff_enabled,
     )
     _cleanup_universe_health(health_state, now_dt=_now_dt(), max_age_days=health_max_age_days)
     _save_universe_health(health_path, health_state)
