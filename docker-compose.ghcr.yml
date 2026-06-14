@@ -2,6 +2,7 @@ services:
   bubo-web:
     image: ${BUBO_IMAGE:-ghcr.io/your-github-user/bubo-trading:latest}
     container_name: bubo-web
+    runtime: ${BUBO_DOCKER_RUNTIME:-runc}
     working_dir: /app
     environment:
       TZ: ${TZ:-Europe/Paris}

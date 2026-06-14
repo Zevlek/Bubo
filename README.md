@@ -22,6 +22,7 @@ cp .env.example .env
 - `BUBO_IMAGE=ghcr.io/zevlek/bubo-trading:latest`
 - `BUBO_WEB_PASSWORD=...`
 - `BUBO_WEB_SECRET=...` (chaine longue et unique)
+- `BUBO_DOCKER_RUNTIME=runc` (recommande sur NAS si le runtime NVIDIA global pose probleme)
 
 3. Lancer:
 
@@ -35,6 +36,8 @@ docker compose -f docker-compose.ghcr.yml up -d
 ```text
 http://IP_DU_NAS:7654
 ```
+
+Si le NAS renvoie une erreur du type `nvidia-container-cli: initialization error: nvml error: driver not loaded`, Bubo n'est pas en cause: le runtime Docker/NVIDIA de l'hote est invoque avant le demarrage du conteneur. Le compose force donc par defaut `runtime: runc` pour `bubo-web`. Si tu veux retenter le GPU plus tard, passe `BUBO_DOCKER_RUNTIME=nvidia` apres avoir valide que le driver NVIDIA est bien charge sur l'hote.
 
 ## Interface web (vue simplifiee)
 
@@ -353,6 +356,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | Variable | Utilite | Obligatoire | Valeurs possibles | Defaut |
 | --- | --- | --- | --- | --- |
 | `TZ` | Fuseau horaire du container | Non | Ex: `Europe/Paris`, `UTC` | `Europe/Paris` |
+| `BUBO_DOCKER_RUNTIME` | Runtime Docker utilise par `bubo-web` | Non | `runc` (safe CPU), `nvidia` (si driver GPU OK) | `runc` |
 | `INSTALL_AI_DEPS` | Installe les deps IA lourdes optionnelles au build local | Non (mode build local uniquement) | `0` (leger), `1` (avec torch/transformers) | `0` |
 | `BUBO_IMAGE` | Image a pull en mode GHCR | Oui en mode GHCR (sinon image fallback) | Ex: `ghcr.io/zevlek/bubo-trading:latest` | `ghcr.io/your-github-user/bubo-trading:latest` |
 | `DOCKER_CONFIG_FILE` | Fichier `config.json` Docker utilise par Watchtower pour l'auth registry | Requis si image privee (GHCR) | Chemin absolu vers `config.json` (ex: `/root/.docker/config.json`) | `/root/.docker/config.json` |

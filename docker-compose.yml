@@ -7,6 +7,7 @@ services:
         INSTALL_AI_DEPS: ${INSTALL_AI_DEPS:-0}
     image: bubo-trading:latest
     container_name: bubo-web
+    runtime: ${BUBO_DOCKER_RUNTIME:-runc}
     working_dir: /app
     environment:
       TZ: ${TZ:-Europe/Paris}
