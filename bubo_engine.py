@@ -2597,15 +2597,21 @@ def run_paper_cycle(engine: ScoringEngine,
                     last_price = float(p.get("market_price", 0.0) or 0.0)
                     if last_price <= 0:
                         last_price = avg_cost if avg_cost > 0 else 0.0
+                    prev_entry_price = float(prev.get("entry_price", 0.0) or 0.0)
+                    prev_shares = int(prev.get("shares", 0) or 0) if isinstance(prev, dict) else 0
+                    has_bubo_entry = prev_entry_price > 0 and prev_shares != 0
+                    same_direction = (prev_shares > 0 and shares > 0) or (prev_shares < 0 and shares < 0)
+                    entry_price = prev_entry_price if has_bubo_entry and same_direction else avg_cost
                     abs_qty = abs(int(shares))
                     mv = float(shares * last_price)
-                    upnl = float((shares * (last_price - avg_cost)) - entry_fee)
+                    upnl = float((shares * (last_price - entry_price)) - entry_fee)
                     resolved_name = str(p.get("name", "") or "").strip() or str(prev.get("name", "") or "").strip() or ticker
                     synced[ticker] = {
                         "ticker": ticker,
                         "name": resolved_name,
                         "shares": int(shares),
-                        "entry_price": float(avg_cost),
+                        "entry_price": float(entry_price),
+                        "avg_cost": float(avg_cost),
                         "entry_fee": float(entry_fee),
                         "entry_date": entry_date,
                         "entry_ts": entry_ts,
@@ -3063,6 +3069,7 @@ def run_paper_cycle(engine: ScoringEngine,
             "name": resolved_name,
             "shares": int(signed_shares),
             "entry_price": float(exec_px),
+            "avg_cost": float(exec_px),
             "entry_fee": float(entry_fee),
             "entry_date": str(entry_ts)[:10] if str(entry_ts).strip() else date.today().isoformat(),
             "entry_ts": entry_ts,

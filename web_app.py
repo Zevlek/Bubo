@@ -666,6 +666,7 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
                     "name": str(pos.get("name", "") or "").strip() or str(ticker),
                     "shares": _safe_int(pos.get("shares"), 0),
                     "entry_price": _safe_float(pos.get("entry_price"), 0.0),
+                    "avg_cost": _safe_float(pos.get("avg_cost", pos.get("entry_price")), 0.0),
                     "last_price": _safe_float(pos.get("last_price"), 0.0),
                     "market_value": _safe_float(pos.get("market_value"), 0.0),
                     "unrealized_pnl": _safe_float(pos.get("unrealized_pnl"), 0.0),

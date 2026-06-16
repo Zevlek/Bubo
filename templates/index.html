@@ -1664,11 +1664,6 @@
         const paperPositions = Array.isArray(paper.positions) ? paper.positions : [];
         const paperByTicker = new Map(paperPositions.map(p => [String(p.ticker || "").toUpperCase(), p]));
         const paperRealized = asNumber(paper.realized_pnl, 0);
-        const paperOpenUnrealized = paperPositions.reduce(
-          (acc, p) => acc + asNumber(p.unrealized_pnl, 0),
-          0
-        );
-        const totalPnl = paperRealized + paperOpenUnrealized;
 
         const accountText = ibkrAvailable ? escapeHtml(ibkr.account || "n/a") : "n/a";
         const latencyText = ibkrAvailable ? `${asNumber(ibkr.latency_ms, 0)} ms` : "n/a";
@@ -1677,17 +1672,6 @@
         const warningText = !ibkrAvailable
           ? (ibkr.enabled ? (ibkr.message || "Snapshot IBKR indisponible.") : "IBKR non actif.")
           : "";
-
-        portfolioKpisEl.innerHTML = `
-          <div class="kpi"><strong>Compte:</strong> ${accountText} | <strong>Latence:</strong> ${latencyText}</div>
-          ${warningText ? `<div class="kpi"><strong>Note:</strong> ${escapeHtml(warningText)} (historique local Bubo affiche)</div>` : ""}
-          <div class="kpi-line">
-            <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${netLiqText}</div></div>
-            <div class="kpi-card"><div class="k-label">Liquidites</div><div class="k-val">${cashText}</div></div>
-            <div class="kpi-card"><div class="k-label">Capital gere</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
-            <div class="kpi-card"><div class="k-label">P/L total</div><div class="k-val ${pnlClass(totalPnl)}">${fmtSignedMoney(totalPnl, currency)}</div></div>
-          </div>
-        `;
 
         let positions = [];
         if (ibkrAvailable) {
@@ -1698,7 +1682,7 @@
             name: p.name,
             symbol: p.ticker,
             quantity: p.shares,
-            avg_cost: p.entry_price,
+            avg_cost: Number.isFinite(maybeNumber(p.avg_cost)) ? p.avg_cost : p.entry_price,
             market_price: p.last_price,
             market_value: p.market_value,
             unrealized_pnl: p.unrealized_pnl
@@ -1709,7 +1693,9 @@
           const symbol = String(pos.symbol || "");
           const key = symbol.toUpperCase();
           const paperPos = paperByTicker.get(key) || {};
+          const hasPaperPos = paperByTicker.has(key);
           const entry = asNumber(paperPos.entry_price, NaN);
+          const paperUnrealized = maybeNumber(paperPos.unrealized_pnl);
           const avgCost = maybeNumber(pos.avg_cost);
           const qty = asNumber(pos.quantity, 0);
           const marketValue = maybeNumber(pos.market_value);
@@ -1725,7 +1711,9 @@
           const unrealizedFallback = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
             ? (marketPrice - avgCost) * qty
             : NaN;
-          const displayUnrealized = Number.isFinite(unrealized) ? unrealized : unrealizedFallback;
+          const displayUnrealized = (hasPaperPos && Number.isFinite(paperUnrealized))
+            ? paperUnrealized
+            : (Number.isFinite(unrealized) ? unrealized : unrealizedFallback);
           return {
             name: displayName,
             symbol,
@@ -1737,6 +1725,20 @@
             currency
           };
         });
+        const totalPnl = paperRealized + latestPositionRows.reduce(
+          (acc, row) => acc + asNumber(row.pnl, 0),
+          0
+        );
+        portfolioKpisEl.innerHTML = `
+          <div class="kpi"><strong>Compte:</strong> ${accountText} | <strong>Latence:</strong> ${latencyText}</div>
+          ${warningText ? `<div class="kpi"><strong>Note:</strong> ${escapeHtml(warningText)} (historique local Bubo affiche)</div>` : ""}
+          <div class="kpi-line">
+            <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${netLiqText}</div></div>
+            <div class="kpi-card"><div class="k-label">Liquidites</div><div class="k-val">${cashText}</div></div>
+            <div class="kpi-card"><div class="k-label">Capital gere</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">P/L total</div><div class="k-val ${pnlClass(totalPnl)}">${fmtSignedMoney(totalPnl, currency)}</div></div>
+          </div>
+        `;
         renderPositions();
 
         const buboRows = (Array.isArray(paper.transactions) ? paper.transactions : []).map(tx => ({
