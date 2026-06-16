@@ -49,7 +49,7 @@ Si le NAS renvoie une erreur du type `nvidia-container-cli: initialization error
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen, prix d'entree, valeur et P/L colore.
 - Les noms d'instruments affiches sont resolves depuis IBKR (ContractDetails), sans fallback externe.
 - Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.
-- `Prix moyen` reste le cout moyen IBKR, tandis que `Prix d'entree` conserve l'entree reelle Bubo; le `P/L total` additionne le realise Bubo et le latent affiche.
+- `Prix moyen` reste le cout moyen IBKR, tandis que `Prix d'entree` est reconstruit depuis l'historique d'ordres Bubo (`data/logs/orders.jsonl`) quand disponible; le `P/L` ouvert et le `P/L total` sont recalcules avec le prix live IBKR et cette entree Bubo.
 - Le bloc `Execution` affiche maintenant l'etat FinBERT (actif/attente/desactive) et l'etat GPU du conteneur (detecte/actif + details VRAM).
 - L'historique affiche une vue fusionnee Bubo + IBKR, avec filtre (`Tout`, `Bubo`, `IBKR`, `Entrees`, `Sorties`), nom d'action, source, raison et P/L realise sur les sorties.
 - Le tableau historique est limite pour eviter un DOM trop lourd (300 lignes max affichees) et se parcourt avec un scroll vertical classique.

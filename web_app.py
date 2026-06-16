@@ -553,6 +553,66 @@ def _paper_report_paths_from_state(state_path: Path) -> dict[str, Path]:
     }
 
 
+def _paper_orders_log_path_from_state(state_path: Path) -> Path:
+    out_dir = state_path.parent if state_path.parent else Path(".")
+    return out_dir / "logs" / "orders.jsonl"
+
+
+def _load_open_bubo_entries_from_orders_log(path: Path, limit: int = 20000) -> dict[str, dict[str, Any]]:
+    rows = _read_jsonl_rows(path, limit=limit)
+    if not rows:
+        return {}
+
+    seen: set[tuple[Any, ...]] = set()
+    open_entries: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        ticker = str(row.get("ticker", "") or "").strip().upper()
+        if not ticker:
+            continue
+
+        status = str(row.get("status", "") or "").strip().lower()
+        if status != "filled":
+            continue
+
+        key = (
+            str(row.get("timestamp", "") or ""),
+            str(row.get("broker", "") or ""),
+            str(row.get("side", "") or ""),
+            ticker,
+            status,
+            str(row.get("reason", "") or ""),
+            str(row.get("filled_shares", "") or row.get("quantity", "") or ""),
+            str(row.get("price", "") or ""),
+            str(row.get("commission", "") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+
+        reason = str(row.get("reason", "") or "").strip().lower()
+        filled = _safe_int(row.get("filled_shares", row.get("quantity")), 0)
+        if filled <= 0:
+            continue
+
+        price = _safe_float_or_none(row.get("price"))
+        commission = _safe_float_or_none(row.get("commission"))
+        timestamp = str(row.get("timestamp", "") or "").strip()
+
+        if reason in {"signal_buy", "signal_short"}:
+            open_entries[ticker] = {
+                "entry_price": price,
+                "entry_fee": 0.0 if commission is None else commission,
+                "entry_ts": timestamp,
+                "shares": -filled if reason == "signal_short" else filled,
+            }
+            continue
+
+        open_entries.pop(ticker, None)
+
+    return open_entries
+
+
 def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[str, Any]], limit: int = 300) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
@@ -655,27 +715,48 @@ def _build_paper_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     state = _read_json_file(state_path)
     broker = str(state.get("paper_broker", cfg.get("paper_broker", "local")) or "local")
     positions_raw = state.get("positions", {})
+    entry_overrides = _load_open_bubo_entries_from_orders_log(_paper_orders_log_path_from_state(state_path))
     positions: list[dict[str, Any]] = []
     if isinstance(positions_raw, dict):
         for ticker, pos in positions_raw.items():
             if not isinstance(pos, dict):
                 continue
-            positions.append(
-                {
-                    "ticker": str(ticker),
-                    "name": str(pos.get("name", "") or "").strip() or str(ticker),
-                    "shares": _safe_int(pos.get("shares"), 0),
-                    "entry_price": _safe_float(pos.get("entry_price"), 0.0),
-                    "avg_cost": _safe_float(pos.get("avg_cost", pos.get("entry_price")), 0.0),
-                    "last_price": _safe_float(pos.get("last_price"), 0.0),
-                    "market_value": _safe_float(pos.get("market_value"), 0.0),
-                    "unrealized_pnl": _safe_float(pos.get("unrealized_pnl"), 0.0),
-                    "entry_fee": _safe_float(pos.get("entry_fee"), 0.0),
-                    "entry_date": str(pos.get("entry_date", "")),
-                    "entry_ts": str(pos.get("entry_ts", "") or ""),
-                    "entry_signal": pos.get("entry_signal") if isinstance(pos.get("entry_signal"), dict) else {},
-                }
-            )
+            clean_ticker = str(ticker)
+            row = {
+                "ticker": clean_ticker,
+                "name": str(pos.get("name", "") or "").strip() or clean_ticker,
+                "shares": _safe_int(pos.get("shares"), 0),
+                "entry_price": _safe_float(pos.get("entry_price"), 0.0),
+                "avg_cost": _safe_float(pos.get("avg_cost", pos.get("entry_price")), 0.0),
+                "last_price": _safe_float(pos.get("last_price"), 0.0),
+                "market_value": _safe_float(pos.get("market_value"), 0.0),
+                "unrealized_pnl": _safe_float(pos.get("unrealized_pnl"), 0.0),
+                "entry_fee": _safe_float(pos.get("entry_fee"), 0.0),
+                "entry_date": str(pos.get("entry_date", "")),
+                "entry_ts": str(pos.get("entry_ts", "") or ""),
+                "entry_signal": pos.get("entry_signal") if isinstance(pos.get("entry_signal"), dict) else {},
+            }
+            override = entry_overrides.get(clean_ticker.strip().upper())
+            if isinstance(override, dict):
+                override_entry = _safe_float_or_none(override.get("entry_price"))
+                override_fee = _safe_float_or_none(override.get("entry_fee"))
+                override_ts = str(override.get("entry_ts", "") or "").strip()
+                if override_entry is not None and override_entry > 0.0:
+                    row["entry_price"] = override_entry
+                if override_fee is not None and override_fee >= 0.0:
+                    row["entry_fee"] = override_fee
+                if override_ts:
+                    row["entry_ts"] = override_ts
+                    row["entry_date"] = override_ts[:10]
+
+            shares = _safe_int(row.get("shares"), 0)
+            last_price = _safe_float(row.get("last_price"), 0.0)
+            entry_price = _safe_float(row.get("entry_price"), 0.0)
+            entry_fee = _safe_float(row.get("entry_fee"), 0.0)
+            if shares != 0 and last_price > 0.0 and entry_price > 0.0:
+                row["unrealized_pnl"] = round((shares * (last_price - entry_price)) - entry_fee, 4)
+
+            positions.append(row)
     positions.sort(key=lambda r: abs(_safe_float(r.get("market_value"), 0.0)), reverse=True)
 
     trades = state.get("trades", [])

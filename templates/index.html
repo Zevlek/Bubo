@@ -1696,6 +1696,7 @@
           const hasPaperPos = paperByTicker.has(key);
           const entry = asNumber(paperPos.entry_price, NaN);
           const paperUnrealized = maybeNumber(paperPos.unrealized_pnl);
+          const entryFee = asNumber(paperPos.entry_fee, 0);
           const avgCost = maybeNumber(pos.avg_cost);
           const qty = asNumber(pos.quantity, 0);
           const marketValue = maybeNumber(pos.market_value);
@@ -1708,10 +1709,15 @@
           const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
             ? valueFallback
             : marketValue;
+          const strategyUnrealized = (Number.isFinite(entry) && Number.isFinite(marketPrice))
+            ? ((qty * (marketPrice - entry)) - entryFee)
+            : NaN;
           const unrealizedFallback = (Number.isFinite(marketPrice) && Number.isFinite(avgCost))
             ? (marketPrice - avgCost) * qty
             : NaN;
-          const displayUnrealized = (hasPaperPos && Number.isFinite(paperUnrealized))
+          const displayUnrealized = (hasPaperPos && Number.isFinite(strategyUnrealized))
+            ? strategyUnrealized
+            : (hasPaperPos && Number.isFinite(paperUnrealized))
             ? paperUnrealized
             : (Number.isFinite(unrealized) ? unrealized : unrealizedFallback);
           return {

@@ -1,9 +1,14 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 try:
     from web_app import (
+        _build_paper_snapshot,
         _get_autostart_settings,
+        _load_open_bubo_entries_from_orders_log,
         _run_autostart,
         build_engine_command,
         get_connectivity_report,
@@ -12,6 +17,8 @@ except ModuleNotFoundError as exc:
     if exc.name == "flask":
         build_engine_command = None
         get_connectivity_report = None
+        _build_paper_snapshot = None
+        _load_open_bubo_entries_from_orders_log = None
         _get_autostart_settings = None
         _run_autostart = None
     else:
@@ -248,6 +255,116 @@ class WebAppTests(unittest.TestCase):
         _run_autostart("watch", 3)
         sleep_mock.assert_called_once_with(3)
         start_mock.assert_called_once_with("watch", None)
+
+    def test_orders_log_reconstructs_latest_open_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "orders.jsonl"
+            rows = [
+                {
+                    "timestamp": "2026-06-01T14:30:00+02:00",
+                    "broker": "ibkr",
+                    "side": "BUY",
+                    "ticker": "AAA",
+                    "filled_shares": 10,
+                    "price": 100.0,
+                    "commission": 1.0,
+                    "status": "filled",
+                    "reason": "signal_buy",
+                },
+                {
+                    "timestamp": "2026-06-02T14:30:00+02:00",
+                    "broker": "ibkr",
+                    "side": "SELL",
+                    "ticker": "AAA",
+                    "filled_shares": 10,
+                    "price": 104.0,
+                    "commission": 1.0,
+                    "status": "filled",
+                    "reason": "rotation",
+                },
+                {
+                    "timestamp": "2026-06-03T14:30:00+02:00",
+                    "broker": "ibkr",
+                    "side": "SELL",
+                    "ticker": "BBB",
+                    "filled_shares": 5,
+                    "price": 50.0,
+                    "commission": 1.0,
+                    "status": "filled",
+                    "reason": "signal_short",
+                },
+            ]
+            log_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+            open_entries = _load_open_bubo_entries_from_orders_log(log_path)
+
+            self.assertNotIn("AAA", open_entries)
+            self.assertIn("BBB", open_entries)
+            self.assertEqual(open_entries["BBB"]["shares"], -5)
+            self.assertAlmostEqual(open_entries["BBB"]["entry_price"], 50.0)
+            self.assertAlmostEqual(open_entries["BBB"]["entry_fee"], 1.0)
+
+    def test_build_paper_snapshot_prefers_bubo_entry_from_orders_log_for_open_pnl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_path = tmp_path / "paper_portfolio_state.json"
+            logs_dir = tmp_path / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            state = {
+                "paper_broker": "ibkr",
+                "cash": 9000.0,
+                "equity": 10000.0,
+                "realized_pnl": 25.0,
+                "positions": {
+                    "AAA": {
+                        "ticker": "AAA",
+                        "name": "AAA Corp",
+                        "shares": 10,
+                        "entry_price": 105.0,
+                        "avg_cost": 105.0,
+                        "entry_fee": 1.0,
+                        "entry_date": "2026-06-01",
+                        "entry_ts": "2026-06-01T10:00:00+02:00",
+                        "last_price": 108.0,
+                        "market_value": 1080.0,
+                        "unrealized_pnl": 29.0,
+                        "entry_signal": {"decision": "BUY"},
+                    }
+                },
+                "trades": [],
+                "action_log": [],
+            }
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+
+            order_rows = [
+                {
+                    "timestamp": "2026-06-01T10:00:00+02:00",
+                    "broker": "ibkr",
+                    "side": "BUY",
+                    "ticker": "AAA",
+                    "filled_shares": 10,
+                    "price": 100.0,
+                    "commission": 1.0,
+                    "status": "filled",
+                    "reason": "signal_buy",
+                }
+            ]
+            (logs_dir / "orders.jsonl").write_text(
+                "\n".join(json.dumps(r) for r in order_rows) + "\n",
+                encoding="utf-8",
+            )
+
+            snapshot = _build_paper_snapshot({"paper_state": str(state_path), "paper_broker": "ibkr"})
+
+            self.assertTrue(snapshot["ok"])
+            self.assertEqual(len(snapshot["positions"]), 1)
+            pos = snapshot["positions"][0]
+            self.assertAlmostEqual(pos["avg_cost"], 105.0)
+            self.assertAlmostEqual(pos["entry_price"], 100.0)
+            self.assertAlmostEqual(pos["unrealized_pnl"], 79.0)
+            self.assertAlmostEqual(snapshot["open_unrealized_pnl"], 79.0)
+            self.assertAlmostEqual(snapshot["total_pnl"], 104.0)
 
 
 if __name__ == "__main__":
