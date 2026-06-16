@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -613,6 +613,109 @@ def _load_open_bubo_entries_from_orders_log(path: Path, limit: int = 20000) -> d
     return open_entries
 
 
+def _ibkr_exec_position_key(con_id: Any, symbol: Any) -> str:
+    con_id_int = _safe_int(con_id, 0)
+    symbol_text = str(symbol or "").strip().upper()
+    if con_id_int > 0:
+        return f"conid:{con_id_int}"
+    return f"symbol:{symbol_text}"
+
+
+def _ibkr_exec_signed_shares(side: Any, shares: Any) -> float:
+    qty = abs(_safe_float(shares, 0.0))
+    side_text = str(side or "").strip().upper()
+    if side_text in {"BOT", "BUY"}:
+        return qty
+    if side_text in {"SLD", "SELL"}:
+        return -qty
+    return 0.0
+
+
+def _apply_signed_execution_to_lots(lots: deque[dict[str, Any]], signed_qty: float, price: float, timestamp: str):
+    remaining = float(signed_qty)
+    while abs(remaining) > 1e-12 and lots:
+        head_qty = _safe_float(lots[0].get("qty"), 0.0)
+        if abs(head_qty) <= 1e-12:
+            lots.popleft()
+            continue
+        if (remaining > 0 and head_qty > 0) or (remaining < 0 and head_qty < 0):
+            break
+        if abs(remaining) >= abs(head_qty) - 1e-12:
+            remaining += head_qty
+            lots.popleft()
+        else:
+            lots[0]["qty"] = round(head_qty + remaining, 12)
+            remaining = 0.0
+    if abs(remaining) > 1e-12:
+        lots.append(
+            {
+                "qty": round(remaining, 12),
+                "price": round(float(price), 8),
+                "time": str(timestamp or ""),
+            }
+        )
+
+
+def _derive_ibkr_open_entries_from_executions(
+    positions: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if not positions or not executions:
+        return {}
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for ex in executions:
+        key = _ibkr_exec_position_key(ex.get("_con_id"), ex.get("symbol"))
+        if key.endswith("symbol:"):
+            continue
+        grouped.setdefault(key, []).append(ex)
+
+    derived: dict[str, dict[str, Any]] = {}
+    for pos in positions:
+        current_qty = _safe_float(pos.get("quantity"), 0.0)
+        if abs(current_qty) < 1e-12:
+            continue
+        key = _ibkr_exec_position_key(pos.get("_con_id"), pos.get("symbol"))
+        pos_execs = grouped.get(key, [])
+        if not pos_execs:
+            continue
+
+        ordered = sorted(
+            pos_execs,
+            key=lambda row: (
+                _parse_ts(row.get("time")) or datetime.min.replace(tzinfo=timezone.utc),
+                str(row.get("exec_id", "") or ""),
+            ),
+        )
+        lots: deque[dict[str, Any]] = deque()
+        for ex in ordered:
+            price = _safe_float_or_none(ex.get("price"))
+            signed_qty = _ibkr_exec_signed_shares(ex.get("side"), ex.get("shares"))
+            if price is None or price <= 0.0 or abs(signed_qty) < 1e-12:
+                continue
+            _apply_signed_execution_to_lots(lots, signed_qty, price, str(ex.get("time", "") or ""))
+
+        remaining_qty = round(sum(_safe_float(lot.get("qty"), 0.0) for lot in lots), 8)
+        if abs(remaining_qty - current_qty) > 1e-6:
+            continue
+
+        total_open = sum(abs(_safe_float(lot.get("qty"), 0.0)) for lot in lots)
+        if total_open <= 1e-12:
+            continue
+        entry_price = sum(
+            abs(_safe_float(lot.get("qty"), 0.0)) * _safe_float(lot.get("price"), 0.0)
+            for lot in lots
+        ) / total_open
+        entry_time = str(lots[0].get("time", "") or "") if lots else ""
+        derived[key] = {
+            "entry_price": round(float(entry_price), 8),
+            "entry_time": entry_time,
+            "source": "ibkr_executions",
+        }
+
+    return derived
+
+
 def _build_bubo_transaction_history(state: dict[str, Any], positions: list[dict[str, Any]], limit: int = 300) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
@@ -1198,6 +1301,23 @@ def _fetch_ibkr_snapshot_uncached(cfg: dict[str, Any]) -> dict[str, Any]:
                     "_con_id": con_id,
                 }
             )
+
+        derived_entries = _derive_ibkr_open_entries_from_executions(positions, executions)
+        if derived_entries:
+            for pos in positions:
+                key = _ibkr_exec_position_key(pos.get("_con_id"), pos.get("symbol"))
+                entry = derived_entries.get(key)
+                if not isinstance(entry, dict):
+                    continue
+                entry_price = _safe_float_or_none(entry.get("entry_price"))
+                if entry_price is None or entry_price <= 0.0:
+                    continue
+                pos["entry_price"] = entry_price
+                pos["entry_price_source"] = str(entry.get("source", "") or "ibkr_executions")
+                entry_time = str(entry.get("entry_time", "") or "").strip()
+                if entry_time:
+                    pos["entry_time"] = entry_time
+
         for ex in executions:
             ex.pop("_con_id", None)
 

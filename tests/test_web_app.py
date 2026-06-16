@@ -7,6 +7,7 @@ from unittest.mock import patch
 try:
     from web_app import (
         _build_paper_snapshot,
+        _derive_ibkr_open_entries_from_executions,
         _get_autostart_settings,
         _load_open_bubo_entries_from_orders_log,
         _run_autostart,
@@ -18,6 +19,7 @@ except ModuleNotFoundError as exc:
         build_engine_command = None
         get_connectivity_report = None
         _build_paper_snapshot = None
+        _derive_ibkr_open_entries_from_executions = None
         _load_open_bubo_entries_from_orders_log = None
         _get_autostart_settings = None
         _run_autostart = None
@@ -303,6 +305,65 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(open_entries["BBB"]["shares"], -5)
             self.assertAlmostEqual(open_entries["BBB"]["entry_price"], 50.0)
             self.assertAlmostEqual(open_entries["BBB"]["entry_fee"], 1.0)
+
+    def test_ibkr_executions_reconstruct_open_entry_price(self):
+        positions = [
+            {
+                "symbol": "AAA",
+                "quantity": 7.0,
+                "_con_id": 123,
+            }
+        ]
+        executions = [
+            {
+                "time": "2026-06-01T15:30:00+02:00",
+                "symbol": "AAA",
+                "side": "BOT",
+                "shares": 10.0,
+                "price": 100.0,
+                "exec_id": "1",
+                "_con_id": 123,
+            },
+            {
+                "time": "2026-06-02T15:30:00+02:00",
+                "symbol": "AAA",
+                "side": "SLD",
+                "shares": 3.0,
+                "price": 110.0,
+                "exec_id": "2",
+                "_con_id": 123,
+            },
+        ]
+
+        derived = _derive_ibkr_open_entries_from_executions(positions, executions)
+
+        self.assertIn("conid:123", derived)
+        self.assertAlmostEqual(derived["conid:123"]["entry_price"], 100.0)
+        self.assertEqual(derived["conid:123"]["source"], "ibkr_executions")
+
+    def test_ibkr_executions_skip_incomplete_history(self):
+        positions = [
+            {
+                "symbol": "AAA",
+                "quantity": 10.0,
+                "_con_id": 123,
+            }
+        ]
+        executions = [
+            {
+                "time": "2026-06-02T15:30:00+02:00",
+                "symbol": "AAA",
+                "side": "BOT",
+                "shares": 3.0,
+                "price": 110.0,
+                "exec_id": "2",
+                "_con_id": 123,
+            },
+        ]
+
+        derived = _derive_ibkr_open_entries_from_executions(positions, executions)
+
+        self.assertEqual(derived, {})
 
     def test_build_paper_snapshot_prefers_bubo_entry_from_orders_log_for_open_pnl(self):
         with tempfile.TemporaryDirectory() as tmp:

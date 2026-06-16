@@ -924,10 +924,10 @@
                     <th class="sortable" data-sort-table="transactions" data-sort-key="name">Nom</th>
                     <th class="sortable" data-sort-table="transactions" data-sort-key="ticker">Symbole</th>
                     <th class="sortable" data-sort-table="transactions" data-sort-key="side">Action</th>
-                    <th class="sortable" data-sort-table="transactions" data-sort-key="quantity">Quantite</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="quantity">Quantité</th>
                     <th class="sortable" data-sort-table="transactions" data-sort-key="price">Prix</th>
                     <th class="sortable" data-sort-table="transactions" data-sort-key="reason">Raison</th>
-                    <th class="sortable" data-sort-table="transactions" data-sort-key="realized_pnl">P/L realise</th>
+                    <th class="sortable" data-sort-table="transactions" data-sort-key="realized_pnl">P/L réalisé</th>
                     <th>IA</th>
                   </tr>
                 </thead>
@@ -1683,6 +1683,7 @@
             symbol: p.ticker,
             quantity: p.shares,
             avg_cost: Number.isFinite(maybeNumber(p.avg_cost)) ? p.avg_cost : p.entry_price,
+            entry_price: p.entry_price,
             market_price: p.last_price,
             market_value: p.market_value,
             unrealized_pnl: p.unrealized_pnl
@@ -1694,7 +1695,8 @@
           const key = symbol.toUpperCase();
           const paperPos = paperByTicker.get(key) || {};
           const hasPaperPos = paperByTicker.has(key);
-          const entry = asNumber(paperPos.entry_price, NaN);
+          const brokerEntry = maybeNumber(pos.entry_price);
+          const entry = Number.isFinite(brokerEntry) ? brokerEntry : asNumber(paperPos.entry_price, NaN);
           const paperUnrealized = maybeNumber(paperPos.unrealized_pnl);
           const entryFee = asNumber(paperPos.entry_fee, 0);
           const avgCost = maybeNumber(pos.avg_cost);
@@ -1740,8 +1742,8 @@
           ${warningText ? `<div class="kpi"><strong>Note:</strong> ${escapeHtml(warningText)} (historique local Bubo affiche)</div>` : ""}
           <div class="kpi-line">
             <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${netLiqText}</div></div>
-            <div class="kpi-card"><div class="k-label">Liquidites</div><div class="k-val">${cashText}</div></div>
-            <div class="kpi-card"><div class="k-label">Capital gere</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Liquidités</div><div class="k-val">${cashText}</div></div>
+            <div class="kpi-card"><div class="k-label">Capital géré</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">P/L total</div><div class="k-val ${pnlClass(totalPnl)}">${fmtSignedMoney(totalPnl, currency)}</div></div>
           </div>
         `;
