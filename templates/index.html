@@ -891,8 +891,13 @@
                   <th class="sortable" data-sort-table="positions" data-sort-key="name">Nom</th>
                   <th class="sortable" data-sort-table="positions" data-sort-key="symbol">Symbole</th>
                   <th class="sortable" data-sort-table="positions" data-sort-key="quantity">Quantité</th>
-                  <th class="sortable" data-sort-table="positions" data-sort-key="avg_cost">Prix moyen</th>
-                  <th class="sortable" data-sort-table="positions" data-sort-key="entry_price">Prix d'entrée</th>
+                  <th
+                    class="sortable"
+                    data-sort-table="positions"
+                    data-sort-key="avg_cost"
+                    title="Coût moyen par action de la position actuelle, tel qu'IBKR le calcule."
+                  >Prix moyen</th>
+                  <th class="sortable" data-sort-table="positions" data-sort-key="current_price">Cours actuel</th>
                   <th class="sortable" data-sort-table="positions" data-sort-key="value">Valeur</th>
                   <th class="sortable" data-sort-table="positions" data-sort-key="pnl">P/L</th>
                 </tr>
@@ -1368,7 +1373,7 @@
       portfolioPosBodyEl.innerHTML = rows.slice(0, 60).map(pos => {
         const qty = asNumber(pos.quantity, 0);
         const avgCost = maybeNumber(pos.avg_cost);
-        const entry = maybeNumber(pos.entry_price);
+        const currentPrice = maybeNumber(pos.current_price);
         const value = maybeNumber(pos.value);
         const pnl = maybeNumber(pos.pnl);
         const pnlClassName = Number.isFinite(pnl) ? pnlClass(pnl) : "";
@@ -1379,7 +1384,7 @@
             <td data-label="Symbole">${escapeHtml(pos.symbol || "n/a")}</td>
             <td data-label="Quantité">${qty.toFixed(0)}</td>
             <td data-label="Prix moyen">${Number.isFinite(avgCost) ? avgCost.toFixed(2) : "n/a"}</td>
-            <td data-label="Prix d'entrée">${Number.isFinite(entry) ? entry.toFixed(2) : "n/a"}</td>
+            <td data-label="Cours actuel">${Number.isFinite(currentPrice) ? currentPrice.toFixed(2) : "n/a"}</td>
             <td data-label="Valeur">${Number.isFinite(value) ? fmtMoney(value, currency) : "n/a"}</td>
             <td data-label="P/L" class="${pnlClassName}">${fmtSignedMoney(pnl, currency)}</td>
           </tr>
@@ -1711,6 +1716,9 @@
           const displayValue = (!Number.isFinite(marketValue) || Math.abs(marketValue) < 1e-9)
             ? valueFallback
             : marketValue;
+          const displayCurrentPrice = Number.isFinite(marketPrice)
+            ? marketPrice
+            : ((qty !== 0 && Number.isFinite(displayValue)) ? (displayValue / qty) : NaN);
           const strategyUnrealized = (Number.isFinite(entry) && Number.isFinite(marketPrice))
             ? ((qty * (marketPrice - entry)) - entryFee)
             : NaN;
@@ -1727,7 +1735,7 @@
             symbol,
             quantity: qty,
             avg_cost: Number.isFinite(avgCost) ? avgCost : null,
-            entry_price: Number.isFinite(entry) ? entry : (Number.isFinite(avgCost) ? avgCost : null),
+            current_price: Number.isFinite(displayCurrentPrice) ? displayCurrentPrice : null,
             value: Number.isFinite(displayValue) ? displayValue : null,
             pnl: Number.isFinite(displayUnrealized) ? displayUnrealized : null,
             currency
