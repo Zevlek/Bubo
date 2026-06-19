@@ -50,8 +50,10 @@ Si le NAS renvoie une erreur du type `nvidia-container-cli: initialization error
 - Les KPI du portefeuille distinguent maintenant la `Valeur nette IBKR`, le `Budget alloue a Bubo`, `l'exposition geree`, la `Valeur nette geree` et le `Budget utilise`, sans reposer sur un `Capital gere` ambigu.
 - Le parametre `Gestion des profits` permet de choisir entre `fixed` (budget de sizing fixe, profits non reinvestis) et `dynamic` (profits/pertes reinvestis dans le sizing suivant).
 - Les noms d'instruments affiches sont resolves depuis IBKR (ContractDetails), sans fallback externe.
-- Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.
+- Le calcul `Valeur`/`P/L` privilegie le prix live IBKR ou une quote IBKR; si aucun prix fiable n'est disponible, le moteur conserve le dernier prix connu et tente un fallback donnees de marche au cycle.
 - `Prix moyen` reste le cout moyen IBKR. Le `P/L` ouvert et le `P/L total` sont recalcules avec le prix live IBKR et l'entree de reference suivie en interne par Bubo.
+- Le moteur recupere les positions via le portfolio IBKR puis les quotes IBKR si besoin; le cout moyen n'est plus utilise comme faux prix live pour declencher les sorties/rotations.
+- Les rapports journaliers acceptent les timestamps avec ou sans fuseau horaire, pour eviter un rapport bloque apres changement de format d'horodatage.
 - Le bloc `Execution` affiche maintenant l'etat FinBERT (actif/attente/desactive) et l'etat GPU du conteneur (detecte/actif + details VRAM).
 - L'historique affiche une vue fusionnee Bubo + IBKR, avec filtre (`Tout`, `Bubo`, `IBKR`, `Entrees`, `Sorties`), nom d'action, source, raison et P/L realise sur les sorties.
 - Le tableau historique est limite pour eviter un DOM trop lourd (300 lignes max affichees) et se parcourt avec un scroll vertical classique.
@@ -164,8 +166,8 @@ services:
       BUBO_IBKR_CAPITAL_LIMIT: ${BUBO_IBKR_CAPITAL_LIMIT:-10000}
       BUBO_IBKR_EXISTING_POSITIONS_POLICY: ${BUBO_IBKR_EXISTING_POSITIONS_POLICY:-include}
       BUBO_ROTATION_ENABLED: ${BUBO_ROTATION_ENABLED:-1}
-      BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-12}
-      BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-1}
+      BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-8}
+      BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-2}
       BUBO_ROTATION_MIN_HOLD_DAYS: ${BUBO_ROTATION_MIN_HOLD_DAYS:-1}
       BUBO_IBKR_ENTRY_CUTOFF_MIN: ${BUBO_IBKR_ENTRY_CUTOFF_MIN:-5}
       BUBO_IBKR_ORDER_MAX_RETRIES: ${BUBO_IBKR_ORDER_MAX_RETRIES:-2}
@@ -273,8 +275,8 @@ services:
       BUBO_IBKR_CAPITAL_LIMIT: ${BUBO_IBKR_CAPITAL_LIMIT:-10000}
       BUBO_IBKR_EXISTING_POSITIONS_POLICY: ${BUBO_IBKR_EXISTING_POSITIONS_POLICY:-include}
       BUBO_ROTATION_ENABLED: ${BUBO_ROTATION_ENABLED:-1}
-      BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-12}
-      BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-1}
+      BUBO_ROTATION_MIN_EDGE: ${BUBO_ROTATION_MIN_EDGE:-8}
+      BUBO_ROTATION_MAX_PER_CYCLE: ${BUBO_ROTATION_MAX_PER_CYCLE:-2}
       BUBO_ROTATION_MIN_HOLD_DAYS: ${BUBO_ROTATION_MIN_HOLD_DAYS:-1}
       BUBO_IBKR_ENTRY_CUTOFF_MIN: ${BUBO_IBKR_ENTRY_CUTOFF_MIN:-5}
       BUBO_IBKR_ORDER_MAX_RETRIES: ${BUBO_IBKR_ORDER_MAX_RETRIES:-2}
@@ -413,8 +415,8 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_CAPITAL_GROWTH_MODE` | Gestion des profits pour le sizing (`fixed` = budget fige, `dynamic` = reinvestit gains/pertes) | Non | `fixed` ou `dynamic` | `fixed` |
 | `BUBO_IBKR_EXISTING_POSITIONS_POLICY` | Gestion des positions IBKR deja ouvertes | Non | `include` ou `ignore` | `include` |
 | `BUBO_ROTATION_ENABLED` | Autorise la rotation (fermer une position faible pour ouvrir une plus forte si portefeuille plein) | Non | `0` ou `1` | `1` |
-| `BUBO_ROTATION_MIN_EDGE` | Ecart minimal de force signal pour declencher une rotation | Non | Nombre `>= 0` (ex: `12`) | `12` |
-| `BUBO_ROTATION_MAX_PER_CYCLE` | Nombre maximum de rotations par cycle | Non | Entier `>= 0` | `1` |
+| `BUBO_ROTATION_MIN_EDGE` | Ecart minimal de force signal pour declencher une rotation | Non | Nombre `>= 0` (ex: `8`) | `8` |
+| `BUBO_ROTATION_MAX_PER_CYCLE` | Nombre maximum de rotations par cycle | Non | Entier `>= 0` | `2` |
 | `BUBO_ROTATION_MIN_HOLD_DAYS` | Bloque les sorties de rotation sur positions trop recentes (anti overtrading intraday) | Non | Entier `>= 0` | `1` |
 | `BUBO_IBKR_ENTRY_CUTOFF_MIN` | Bloque les nouvelles entrees IBKR a l'approche de la cloture US | Non | Entier `>= 0` (minutes) | `5` |
 | `BUBO_IBKR_ORDER_MAX_RETRIES` | Nombre d'essais max d'un ordre IBKR avant abandon | Non | Entier `>= 1` | `2` |

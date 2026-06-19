@@ -22,6 +22,7 @@ import argparse
 import warnings
 import json
 import urllib.request
+from collections import Counter
 from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -152,8 +153,8 @@ class EngineConfig:
     max_open_positions: int = 6
     max_total_exposure_pct: float = 0.90
     rotation_enabled: bool = True
-    rotation_min_edge: float = 12.0
-    rotation_max_per_cycle: int = 1
+    rotation_min_edge: float = 8.0
+    rotation_max_per_cycle: int = 2
     rotation_min_hold_days: int = 1
 
     # Backtest
@@ -1422,12 +1423,19 @@ def _empty_daily_stats_df() -> pd.DataFrame:
     )
 
 
+def _parse_paper_timestamps(values: object) -> pd.Series:
+    try:
+        return pd.to_datetime(values, errors="coerce", utc=True, format="mixed")
+    except TypeError:
+        return pd.to_datetime(values, errors="coerce", utc=True)
+
+
 def build_daily_paper_stats(state: dict) -> pd.DataFrame:
     curve_df = pd.DataFrame(state.get("equity_curve", []))
     if curve_df.empty:
         return _empty_daily_stats_df()
 
-    curve_df["timestamp"] = pd.to_datetime(curve_df.get("timestamp"), errors="coerce")
+    curve_df["timestamp"] = _parse_paper_timestamps(curve_df.get("timestamp"))
     curve_df = curve_df.dropna(subset=["timestamp"]).sort_values("timestamp")
     if curve_df.empty:
         return _empty_daily_stats_df()
@@ -1491,7 +1499,7 @@ def build_daily_paper_stats(state: dict) -> pd.DataFrame:
 
     actions_df = pd.DataFrame(state.get("action_log", []))
     if not actions_df.empty and "timestamp" in actions_df.columns:
-        actions_df["timestamp"] = pd.to_datetime(actions_df["timestamp"], errors="coerce")
+        actions_df["timestamp"] = _parse_paper_timestamps(actions_df["timestamp"])
         actions_df = actions_df.dropna(subset=["timestamp"])
         if not actions_df.empty:
             actions_df["day"] = actions_df["timestamp"].dt.date.astype(str)
@@ -2057,6 +2065,7 @@ def log_cycle_outputs(results: dict,
             "positions": summary.get("positions"),
             "actions_count": len(summary.get("actions", []) or []),
             "warnings_count": len(summary.get("warnings", []) or []),
+            "no_trade_reasons": summary.get("no_trade_reasons", {}),
             "trading_enabled": bool(summary.get("trading_enabled", True)),
             "trading_pause_reason": str(summary.get("trading_pause_reason", "") or ""),
         })
@@ -2418,17 +2427,49 @@ class IBKRPaperAdapter:
             return {"ok": False, "reason": "not connected", "positions": []}
 
         account = str(self.cfg.ibkr_account or "").strip()
+        def _to_float_or_none(value: object) -> float | None:
+            try:
+                out = float(value)  # type: ignore[arg-type]
+            except Exception:
+                return None
+            if out != out or out <= 0:
+                return None
+            return out
+
+        def _to_finite_float(value: object) -> float | None:
+            try:
+                out = float(value)  # type: ignore[arg-type]
+            except Exception:
+                return None
+            if out != out:
+                return None
+            return out
+
         try:
             try:
-                pos_rows = ib.positions(account=account) if account else ib.positions()
+                raw_rows = ib.portfolio(account=account) if account else ib.portfolio()
             except TypeError:
-                pos_rows = ib.positions()
+                raw_rows = ib.portfolio()
         except Exception as e:
-            return {"ok": False, "reason": str(e), "positions": []}
+            raw_rows = []
+
+        source = "portfolio" if raw_rows else "positions"
+        if not raw_rows:
+            try:
+                try:
+                    raw_rows = ib.positions(account=account) if account else ib.positions()
+                except TypeError:
+                    raw_rows = ib.positions()
+            except Exception as e:
+                return {"ok": False, "reason": str(e), "positions": []}
 
         out = []
         names_by_conid: dict[int, str] = {}
-        for row in pos_rows or []:
+        contracts_to_quote: dict[int, object] = {}
+        for row in raw_rows or []:
+            row_account = str(getattr(row, "account", "") or "")
+            if account and row_account and row_account != account:
+                continue
             contract = getattr(row, "contract", None)
             symbol = str(getattr(contract, "symbol", "") or "").strip().upper()
             if not symbol:
@@ -2446,18 +2487,15 @@ class IBKRPaperAdapter:
                 continue
             if qty < 0 and not self.cfg.allow_short:
                 continue
-            try:
-                avg_cost = float(getattr(row, "avgCost", 0.0) or 0.0)
-            except Exception:
-                avg_cost = 0.0
-            try:
-                market_price = float(getattr(row, "marketPrice", None))
-                if market_price != market_price:  # NaN
-                    market_price = None
-            except Exception:
-                market_price = None
-            if market_price is None or market_price <= 0:
-                market_price = avg_cost if avg_cost > 0 else None
+
+            avg_attr = "averageCost" if source == "portfolio" else "avgCost"
+            avg_cost = _to_float_or_none(getattr(row, avg_attr, None)) or 0.0
+            market_price = _to_float_or_none(getattr(row, "marketPrice", None))
+            market_price_source = source if market_price is not None else ""
+            market_value = getattr(row, "marketValue", None) if source == "portfolio" else None
+            unrealized_pnl = getattr(row, "unrealizedPNL", None) if source == "portfolio" else None
+            if market_price is None and contract is not None and con_id > 0:
+                contracts_to_quote[con_id] = contract
 
             name = str(getattr(contract, "description", "") or "").strip() or symbol
             if con_id > 0:
@@ -2486,8 +2524,52 @@ class IBKRPaperAdapter:
                     "shares": int(qty),
                     "avg_cost": float(avg_cost),
                     "market_price": float(market_price) if market_price is not None else None,
+                    "market_price_source": market_price_source,
+                    "market_value": _to_finite_float(market_value),
+                    "unrealized_pnl": _to_finite_float(unrealized_pnl),
+                    "_con_id": int(con_id),
                 }
             )
+        if contracts_to_quote:
+            try:
+                quote_rows = ib.reqTickers(*contracts_to_quote.values()) or []
+            except Exception:
+                quote_rows = []
+            quote_by_conid: dict[int, float] = {}
+            for quote in quote_rows:
+                contract = getattr(quote, "contract", None)
+                con_id = 0
+                try:
+                    con_id = int(getattr(contract, "conId", 0) or 0)
+                except Exception:
+                    con_id = 0
+                if con_id <= 0:
+                    continue
+                price = None
+                try:
+                    market_price_fn = getattr(quote, "marketPrice", None)
+                    if callable(market_price_fn):
+                        price = _to_float_or_none(market_price_fn())
+                except Exception:
+                    price = None
+                if price is None:
+                    for attr in ("last", "close", "midpoint"):
+                        cand = _to_float_or_none(getattr(quote, attr, None))
+                        if cand is not None:
+                            price = cand
+                            break
+                if price is not None:
+                    quote_by_conid[con_id] = price
+
+            if quote_by_conid:
+                for row in out:
+                    con_id = int(row.get("_con_id", 0) or 0)
+                    if row.get("market_price") is None and con_id in quote_by_conid:
+                        row["market_price"] = float(quote_by_conid[con_id])
+                        row["market_price_source"] = "quote"
+
+        for row in out:
+            row.pop("_con_id", None)
         return {"ok": True, "positions": out}
 
 
@@ -2527,6 +2609,7 @@ def run_paper_cycle(engine: ScoringEngine,
     actions = []
     order_events = []
     warnings_list = []
+    no_trade_reasons: Counter[str] = Counter()
     trading_enabled = bool(trade_enabled)
     trading_pause_reason = str(trade_pause_reason or "").strip()
     if not trading_enabled:
@@ -2603,9 +2686,14 @@ def run_paper_cycle(engine: ScoringEngine,
                     if not entry_ts:
                         entry_ts = f"{entry_date}T00:00:00"
                     avg_cost = float(p.get("avg_cost", 0.0) or 0.0)
-                    last_price = float(p.get("market_price", 0.0) or 0.0)
+                    raw_market_price = float(p.get("market_price", 0.0) or 0.0)
+                    price_source = str(p.get("market_price_source", "") or "").strip().lower()
+                    if raw_market_price > 0 and not price_source:
+                        price_source = "ibkr"
+                    last_price = raw_market_price
                     if last_price <= 0:
-                        last_price = avg_cost if avg_cost > 0 else 0.0
+                        last_price = float(prev.get("last_price", 0.0) or 0.0)
+                        price_source = "stale" if last_price > 0 else "missing"
                     prev_entry_price = float(prev.get("entry_price", 0.0) or 0.0)
                     prev_shares = int(prev.get("shares", 0) or 0) if isinstance(prev, dict) else 0
                     has_bubo_entry = prev_entry_price > 0 and prev_shares != 0
@@ -2613,7 +2701,16 @@ def run_paper_cycle(engine: ScoringEngine,
                     entry_price = prev_entry_price if has_bubo_entry and same_direction else avg_cost
                     abs_qty = abs(int(shares))
                     mv = float(shares * last_price)
-                    upnl = float((shares * (last_price - entry_price)) - entry_fee)
+                    broker_unrealized = p.get("unrealized_pnl")
+                    if last_price > 0:
+                        upnl = float((shares * (last_price - entry_price)) - entry_fee)
+                    elif broker_unrealized is not None:
+                        try:
+                            upnl = float(broker_unrealized)
+                        except Exception:
+                            upnl = float(prev.get("unrealized_pnl", 0.0) or 0.0)
+                    else:
+                        upnl = float(prev.get("unrealized_pnl", 0.0) or 0.0)
                     resolved_name = str(p.get("name", "") or "").strip() or str(prev.get("name", "") or "").strip() or ticker
                     synced[ticker] = {
                         "ticker": ticker,
@@ -2625,6 +2722,7 @@ def run_paper_cycle(engine: ScoringEngine,
                         "entry_date": entry_date,
                         "entry_ts": entry_ts,
                         "last_price": float(last_price),
+                        "price_source": price_source,
                         "market_value": float(mv),
                         "unrealized_pnl": float(upnl),
                         "entry_signal": prev.get("entry_signal", {}),
@@ -2667,6 +2765,9 @@ def run_paper_cycle(engine: ScoringEngine,
         for tk in held_tickers:
             pos_row = positions.get(tk, {})
             if isinstance(pos_row, dict):
+                price_source = str(pos_row.get("price_source", "") or "").strip().lower()
+                if price_source in {"stale", "missing"}:
+                    continue
                 try:
                     pos_px = float(pos_row.get("last_price", 0.0) or 0.0)
                 except Exception:
@@ -2955,19 +3056,27 @@ def run_paper_cycle(engine: ScoringEngine,
     candidate_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
     rotation_count = 0
+
+    def _count_no_trade(reason: str):
+        no_trade_reasons[str(reason or "unknown")] += 1
+
     for _rank_score, _conf, side, r in candidate_rows:
         ticker = str(r.get("ticker", "")).strip().upper()
         if not ticker or ticker in positions:
+            if ticker in positions:
+                _count_no_trade("already in portfolio")
             continue
 
         target_pct = float(r.get("position_size_pct", 0.0) or 0.0)
         if target_pct <= 0:
+            _count_no_trade("non-positive position size")
             continue
         if len(positions) >= int(cfg.max_open_positions):
             if (
                 (not cfg.rotation_enabled)
                 or rotation_count >= int(cfg.rotation_max_per_cycle)
             ):
+                _count_no_trade("max positions reached; rotation unavailable")
                 continue
             candidate_strength = _candidate_strength(side, r)
             weakest_ticker = None
@@ -2979,16 +3088,19 @@ def run_paper_cycle(engine: ScoringEngine,
                     weakest_ticker = held_ticker
 
             if weakest_ticker is None:
+                _count_no_trade("rotation no weakest position")
                 continue
 
             edge = float(candidate_strength - weakest_strength)
             if edge < float(cfg.rotation_min_edge):
+                _count_no_trade("rotation edge below threshold")
                 continue
 
             weakest_pos = positions.get(weakest_ticker, {})
             hold_days = _holding_days(weakest_pos if isinstance(weakest_pos, dict) else {})
             min_hold_days = max(0, int(getattr(cfg, "rotation_min_hold_days", 1) or 0))
             if hold_days < min_hold_days:
+                _count_no_trade("rotation min hold days")
                 warnings_list.append(
                     f"Rotation skip: {weakest_ticker} held {hold_days}d < min {min_hold_days}d"
                 )
@@ -2996,6 +3108,7 @@ def run_paper_cycle(engine: ScoringEngine,
 
             weakest_snapshot = _decision_snapshot(results.get(weakest_ticker, {}) if isinstance(results, dict) else {})
             if not _close_position(weakest_ticker, "rotation", weakest_snapshot):
+                _count_no_trade("rotation close failed")
                 continue
             rotation_count += 1
             warnings_list.append(
@@ -3006,8 +3119,10 @@ def run_paper_cycle(engine: ScoringEngine,
 
         px = prices.get(ticker)
         if px is None or px <= 0:
+            _count_no_trade("missing price")
             continue
         if broker == "ibkr" and ibkr_entry_block_reason:
+            _count_no_trade(f"entry gate: {ibkr_entry_block_reason}")
             continue
 
         managed_capital_effective = _managed_budget_for_entries()
@@ -3015,6 +3130,7 @@ def run_paper_cycle(engine: ScoringEngine,
         current_expo = positions_market_value() / eq_before if eq_before > 0 else 0.0
         remaining_expo = cfg.max_total_exposure_pct - current_expo
         if remaining_expo < cfg.min_position_pct:
+            _count_no_trade("insufficient exposure budget")
             continue
         target_pct = min(target_pct, remaining_expo)
 
@@ -3030,6 +3146,7 @@ def run_paper_cycle(engine: ScoringEngine,
                 desired_value = float(state["cash"]) * target_pct
         shares = int(desired_value / exec_px) if exec_px > 0 else 0
         if shares <= 0:
+            _count_no_trade("order size rounds to zero")
             continue
 
         gross = shares * exec_px
@@ -3042,6 +3159,7 @@ def run_paper_cycle(engine: ScoringEngine,
             entry_fee = gross * fee_rate
             total_debit = gross + entry_fee
         if (not is_short_entry) and broker != "ibkr" and (shares <= 0 or total_debit > state["cash"]):
+            _count_no_trade("insufficient cash")
             continue
 
         if broker == "ibkr":
@@ -3058,6 +3176,7 @@ def run_paper_cycle(engine: ScoringEngine,
             )
             if not order_res.get("ok"):
                 reason = str(order_res.get("reason", "unknown"))
+                _count_no_trade(f"ibkr order skipped: {reason}")
                 warnings_list.append(
                     f"IBKR {order_side} {ticker} skipped: {reason}"
                 )
@@ -3079,6 +3198,7 @@ def run_paper_cycle(engine: ScoringEngine,
             entry_fee = float(order_res.get("commission", 0.0) or 0.0)
             total_debit = gross + entry_fee
             if shares <= 0:
+                _count_no_trade("ibkr filled zero shares")
                 continue
 
         if broker != "ibkr":
@@ -3137,6 +3257,8 @@ def run_paper_cycle(engine: ScoringEngine,
         if px is None or px <= 0:
             px = float(pos.get("last_price", pos["entry_price"]))
         pos["last_price"] = round(float(px), 4)
+        if str(pos.get("price_source", "") or "").strip().lower() in {"stale", "missing"} and px > 0:
+            pos["price_source"] = "market_data"
         entry_price = float(pos.get("entry_price", 0.0) or 0.0)
         abs_qty = abs(signed_qty)
         mv_signed = float(signed_qty * px)
@@ -3150,6 +3272,11 @@ def run_paper_cycle(engine: ScoringEngine,
         market_value_gross += mv_abs
 
     state["realized_pnl"] = round(float(state["realized_pnl"]), 4)
+    if no_trade_reasons:
+        top_reasons = ", ".join(
+            f"{reason}={count}" for reason, count in no_trade_reasons.most_common(5)
+        )
+        warnings_list.append(f"No-trade reasons: {top_reasons}")
     managed_capital_effective = max(1.0, _managed_budget_for_entries())
     if broker == "ibkr":
         # Mark-to-market managed equity so daily stats/PnL are not flat.
@@ -3231,6 +3358,7 @@ def run_paper_cycle(engine: ScoringEngine,
         "daily_closed_pnl": float(daily_latest.get("closed_pnl", 0.0) or 0.0),
         "daily_realized_pnl": float(daily_latest.get("realized_pnl_today", 0.0) or 0.0),
         "warnings": warnings_list,
+        "no_trade_reasons": dict(no_trade_reasons),
     }
 
 
@@ -3274,6 +3402,10 @@ def print_paper_summary(summary: dict):
               f"| DayPnL={summary.get('daily_closed_pnl', 0.0):+.2f} "
               f"| RealizedToday={summary.get('daily_realized_pnl', 0.0):+.2f} "
               f"| Actions={summary.get('daily_actions', 0)}")
+    no_trade_reasons = summary.get("no_trade_reasons") or {}
+    if no_trade_reasons:
+        top_reasons = sorted(no_trade_reasons.items(), key=lambda item: int(item[1]), reverse=True)[:5]
+        print("   NoTrade: " + ", ".join(f"{reason}={count}" for reason, count in top_reasons))
     if summary.get("actions"):
         print(f"   Actions: {', '.join(summary['actions'][:5])}")
     if summary.get("warnings"):
@@ -3508,13 +3640,13 @@ def main():
     parser.add_argument(
         "--rotation-min-edge",
         type=float,
-        default=float(os.getenv("BUBO_ROTATION_MIN_EDGE", "12")),
+        default=float(os.getenv("BUBO_ROTATION_MIN_EDGE", "8")),
         help="Ecart minimal de force signal (en points) pour declencher une rotation.",
     )
     parser.add_argument(
         "--rotation-max-per-cycle",
         type=int,
-        default=int(os.getenv("BUBO_ROTATION_MAX_PER_CYCLE", "1")),
+        default=int(os.getenv("BUBO_ROTATION_MAX_PER_CYCLE", "2")),
         help="Nombre maximal de rotations autorisees par cycle.",
     )
     parser.add_argument(

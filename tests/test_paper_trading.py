@@ -379,6 +379,104 @@ class PaperTradingTests(unittest.TestCase):
             self.assertAlmostEqual(pos["unrealized_pnl"], 79.0)
             self.assertAlmostEqual(summary["unrealized_pnl"], 79.0)
 
+    def test_ibkr_sync_missing_market_price_uses_market_data_not_avg_cost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+            self.cfg.paper_broker = "ibkr"
+            self.cfg.ibkr_existing_positions_policy = "include"
+
+            state = load_paper_state(str(state_path), self.cfg)
+            state["positions"] = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "name": "AAA Corp",
+                    "shares": 10,
+                    "entry_price": 100.0,
+                    "avg_cost": 100.0,
+                    "entry_fee": 1.0,
+                    "entry_date": "2026-06-01",
+                    "entry_ts": "2026-06-01T10:00:00",
+                    "last_price": 101.0,
+                    "price_source": "market_data",
+                    "market_value": 1010.0,
+                    "unrealized_pnl": 9.0,
+                    "entry_signal": {"decision": "BUY"},
+                }
+            }
+            bubo_engine.save_paper_state(str(state_path), state)
+
+            class _FakeIBKR:
+                def __init__(self, _cfg):
+                    pass
+
+                def connect(self):
+                    return None
+
+                def fetch_open_positions(self):
+                    return {
+                        "ok": True,
+                        "positions": [
+                            {
+                                "ticker": "AAA",
+                                "name": "AAA Corp",
+                                "shares": 10,
+                                "avg_cost": 105.0,
+                                "market_price": None,
+                            }
+                        ],
+                    }
+
+                def disconnect(self):
+                    return None
+
+            original_adapter = bubo_engine.IBKRPaperAdapter
+            try:
+                bubo_engine.IBKRPaperAdapter = _FakeIBKR
+                summary = self._run_cycle({}, {"AAA": 108.0}, state_path)
+            finally:
+                bubo_engine.IBKRPaperAdapter = original_adapter
+                self.cfg.paper_broker = "local"
+                self.cfg.ibkr_existing_positions_policy = "include"
+
+            persisted = load_paper_state(str(state_path), self.cfg)
+            pos = persisted["positions"]["AAA"]
+            self.assertAlmostEqual(pos["avg_cost"], 105.0)
+            self.assertAlmostEqual(pos["last_price"], 108.0)
+            self.assertNotAlmostEqual(pos["last_price"], pos["avg_cost"])
+            self.assertAlmostEqual(pos["unrealized_pnl"], 79.0)
+            self.assertAlmostEqual(summary["unrealized_pnl"], 79.0)
+
+    def test_daily_stats_handles_mixed_timestamp_formats(self):
+        state = {
+            "equity_curve": [
+                {
+                    "timestamp": "2026-04-10T22:03:42",
+                    "equity": 10000.0,
+                    "cash": 5000.0,
+                    "market_value": 5000.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "open_positions": 1,
+                },
+                {
+                    "timestamp": "2026-06-19T17:28:35+02:00",
+                    "equity": 10100.0,
+                    "cash": 4900.0,
+                    "market_value": 5200.0,
+                    "realized_pnl": 50.0,
+                    "unrealized_pnl": 50.0,
+                    "open_positions": 1,
+                },
+            ],
+            "trades": [],
+            "action_log": [],
+        }
+
+        daily = bubo_engine.build_daily_paper_stats(state)
+
+        self.assertEqual(list(daily["day"]), ["2026-04-10", "2026-06-19"])
+        self.assertAlmostEqual(float(daily.iloc[-1]["end_equity"]), 10100.0)
+
     def test_ibkr_dynamic_budget_reinvests_profits_for_next_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "paper_state.json"
