@@ -556,6 +556,19 @@
       text-transform: uppercase;
     }
 
+    .positions-total-main {
+      display: block;
+      font-weight: 700;
+    }
+
+    .positions-total-sub {
+      display: block;
+      margin-top: 2px;
+      color: #4d6777;
+      font-size: 0.76rem;
+      font-weight: 600;
+    }
+
     .table-wrap h3 {
       margin: 0;
       padding: 8px 10px;
@@ -1385,7 +1398,11 @@
       }
       const rows = sortRowsForTable(latestPositionRows, "positions");
       const displayRows = rows.slice(0, 60);
-      const totalValue = latestPositionRows.reduce((acc, row) => {
+      const totalNetValue = latestPositionRows.reduce((acc, row) => {
+        const value = maybeNumber(row.value);
+        return acc + (Number.isFinite(value) ? value : 0);
+      }, 0);
+      const totalExposure = latestPositionRows.reduce((acc, row) => {
         const value = maybeNumber(row.value);
         return acc + (Number.isFinite(value) ? Math.abs(value) : 0);
       }, 0);
@@ -1423,8 +1440,14 @@
           <td data-label="Symbole">${latestPositionRows.length} position${latestPositionRows.length > 1 ? "s" : ""}</td>
           <td data-label="Quantité">-</td>
           <td data-label="Prix moyen">-</td>
-          <td data-label="Cours actuel">-</td>
-          <td data-label="Valeur">${fmtMoney(totalValue, totalCurrency)}</td>
+          <td data-label="Cours actuel">
+            <span class="positions-total-main">Exposition</span>
+            <span class="positions-total-sub">${fmtMoney(totalExposure, totalCurrency)}</span>
+          </td>
+          <td data-label="Valeur">
+            <span class="positions-total-main">${fmtMoney(totalNetValue, totalCurrency)}</span>
+            <span class="positions-total-sub">Valeur nette</span>
+          </td>
           <td data-label="P/L" class="${totalPnlClassName}">${fmtSignedMoney(totalPnl, totalCurrency)}</td>
         </tr>
       `;
