@@ -171,6 +171,7 @@ class EngineConfig:
     ibkr_exchange: str = "SMART"
     ibkr_currency: str = "USD"
     ibkr_capital_limit: float = 10000.0
+    capital_growth_mode: str = "fixed"  # fixed | dynamic
     ibkr_existing_positions_policy: str = "include"  # include | ignore
     ibkr_entry_cutoff_min: int = 5
     ibkr_order_max_retries: int = 2
@@ -199,6 +200,11 @@ def _normalize_decision_engine(value: str) -> str:
 def _normalize_ibkr_existing_positions_policy(value: str) -> str:
     policy = str(value or "include").strip().lower()
     return policy if policy in {"include", "ignore"} else "include"
+
+
+def _normalize_capital_growth_mode(value: str) -> str:
+    mode = str(value or "fixed").strip().lower()
+    return mode if mode in {"fixed", "dynamic"} else "fixed"
 
 
 def _is_strategy_ticker(symbol: object) -> bool:
@@ -2503,13 +2509,16 @@ def run_paper_cycle(engine: ScoringEngine,
     ibkr_positions_policy = _normalize_ibkr_existing_positions_policy(
         getattr(cfg, "ibkr_existing_positions_policy", "include")
     )
-    managed_capital = float(
+    managed_capital_base = float(
         getattr(cfg, "ibkr_capital_limit", cfg.initial_capital)
         if broker == "ibkr"
         else cfg.initial_capital
     )
-    if managed_capital <= 0:
-        managed_capital = float(cfg.initial_capital)
+    if managed_capital_base <= 0:
+        managed_capital_base = float(cfg.initial_capital)
+    capital_growth_mode = _normalize_capital_growth_mode(
+        getattr(cfg, "capital_growth_mode", "fixed")
+    )
 
     fee_rate = cfg.trade_fee_bps / 10_000
     slippage_rate = cfg.slippage_bps / 10_000
@@ -2669,6 +2678,27 @@ def run_paper_cycle(engine: ScoringEngine,
         if tk in prices and isinstance(prices[tk], (int, float)) and float(prices[tk]) > 0:
             continue
         prices[tk] = _latest_price(engine, tk, price_cache)
+
+    def _managed_budget_for_entries() -> float:
+        if capital_growth_mode != "dynamic":
+            return float(managed_capital_base)
+
+        realized_now = float(state.get("realized_pnl", 0.0) or 0.0)
+        unrealized_now = 0.0
+        for tk, pos_row in positions.items():
+            signed_qty = _signed_shares(pos_row)
+            if signed_qty == 0:
+                continue
+            px = prices.get(tk)
+            if px is None or px <= 0:
+                px = float(pos_row.get("last_price", pos_row.get("entry_price", 0.0)) or 0.0)
+            if px <= 0:
+                continue
+            entry_price = float(pos_row.get("entry_price", 0.0) or 0.0)
+            entry_fee = float(pos_row.get("entry_fee", 0.0) or 0.0)
+            unrealized_now += (signed_qty * (px - entry_price)) - entry_fee
+
+        return max(1.0, float(managed_capital_base) + realized_now + unrealized_now)
 
     def _signed_shares(pos_row: dict[str, Any]) -> int:
         try:
@@ -2980,7 +3010,8 @@ def run_paper_cycle(engine: ScoringEngine,
         if broker == "ibkr" and ibkr_entry_block_reason:
             continue
 
-        eq_before = float(managed_capital) if broker == "ibkr" else (float(state["cash"]) + positions_market_value())
+        managed_capital_effective = _managed_budget_for_entries()
+        eq_before = managed_capital_effective if broker == "ibkr" else (float(state["cash"]) + positions_market_value())
         current_expo = positions_market_value() / eq_before if eq_before > 0 else 0.0
         remaining_expo = cfg.max_total_exposure_pct - current_expo
         if remaining_expo < cfg.min_position_pct:
@@ -2990,8 +3021,8 @@ def run_paper_cycle(engine: ScoringEngine,
         is_short_entry = side == "short"
         exec_px = px * (1 - slippage_rate if is_short_entry else 1 + slippage_rate)
         if broker == "ibkr":
-            remaining_alloc = max(0.0, managed_capital - positions_market_value())
-            desired_value = min(float(managed_capital) * target_pct, remaining_alloc)
+            remaining_alloc = max(0.0, managed_capital_effective - positions_market_value())
+            desired_value = min(float(managed_capital_effective) * target_pct, remaining_alloc)
         else:
             if is_short_entry:
                 desired_value = max(0.0, eq_before * target_pct)
@@ -3119,9 +3150,10 @@ def run_paper_cycle(engine: ScoringEngine,
         market_value_gross += mv_abs
 
     state["realized_pnl"] = round(float(state["realized_pnl"]), 4)
+    managed_capital_effective = max(1.0, _managed_budget_for_entries())
     if broker == "ibkr":
         # Mark-to-market managed equity so daily stats/PnL are not flat.
-        mtm_equity = float(managed_capital) + float(state["realized_pnl"]) + float(unrealized)
+        mtm_equity = float(managed_capital_base) + float(state["realized_pnl"]) + float(unrealized)
         state["equity"] = round(mtm_equity, 4)
         state["cash"] = round(mtm_equity - market_value_net, 4)
     else:
@@ -3166,7 +3198,9 @@ def run_paper_cycle(engine: ScoringEngine,
         "paper_broker": state.get("paper_broker", broker),
         "trading_enabled": bool(trading_enabled),
         "trading_pause_reason": str(trading_pause_reason),
-        "managed_capital": round(float(managed_capital), 4),
+        "managed_capital": round(float(managed_capital_base), 4),
+        "managed_capital_effective": round(float(managed_capital_effective), 4),
+        "capital_growth_mode": capital_growth_mode,
         "ibkr_existing_positions_policy": ibkr_positions_policy if broker == "ibkr" else "",
         "state_path": state_path,
         "trades_path": report_paths["trades_csv"],
@@ -3219,8 +3253,12 @@ def print_paper_summary(summary: dict):
         reason = str(summary.get("trading_pause_reason", "") or "trading paused")
         print(f"   TradingGate=paused ({reason})")
     if summary.get("paper_broker") == "ibkr":
-        print(f"   ManagedCapital={summary.get('managed_capital', 0.0):.2f} "
-              f"| ExistingPositions={summary.get('ibkr_existing_positions_policy', 'include')}")
+        print(
+            f"   ManagedCapital={summary.get('managed_capital', 0.0):.2f} "
+            f"| EffectiveBudget={summary.get('managed_capital_effective', summary.get('managed_capital', 0.0)):.2f} "
+            f"| GrowthMode={summary.get('capital_growth_mode', 'fixed')} "
+            f"| ExistingPositions={summary.get('ibkr_existing_positions_policy', 'include')}"
+        )
     print(f"   Equity={summary['equity']:.2f} | Cash={summary['cash']:.2f} "
           f"| Realized={summary['realized_pnl']:+.2f} | Unrealized={summary['unrealized_pnl']:+.2f} "
           f"| Positions={summary['positions']}")
@@ -3450,6 +3488,12 @@ def main():
         help="Capital max alloue a BUBO sur IBKR",
     )
     parser.add_argument(
+        "--capital-growth-mode",
+        type=str,
+        default=os.getenv("BUBO_CAPITAL_GROWTH_MODE", "fixed"),
+        help="Gestion des profits pour le sizing: fixed|dynamic",
+    )
+    parser.add_argument(
         "--ibkr-existing-positions-policy",
         type=str,
         default=os.getenv("BUBO_IBKR_EXISTING_POSITIONS_POLICY", "include"),
@@ -3534,6 +3578,7 @@ def main():
     cfg.ibkr_exchange = str(args.ibkr_exchange).strip() or "SMART"
     cfg.ibkr_currency = str(args.ibkr_currency).strip().upper() or "USD"
     cfg.ibkr_capital_limit = max(1.0, float(args.ibkr_capital_limit))
+    cfg.capital_growth_mode = _normalize_capital_growth_mode(args.capital_growth_mode)
     cfg.ibkr_existing_positions_policy = _normalize_ibkr_existing_positions_policy(
         args.ibkr_existing_positions_policy
     )

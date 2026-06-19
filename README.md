@@ -48,6 +48,7 @@ Si le NAS renvoie une erreur du type `nvidia-container-cli: initialization error
 - Le panneau `Logs en direct` permet de choisir la profondeur (300 a 10 000 lignes), avec remontee depuis le log persistant.
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen (avec infobulle d'explication), cours actuel, valeur, P/L colore et ligne `TOTAL` avec `Valeur nette` + `Exposition`.
 - Les KPI du portefeuille distinguent maintenant la `Valeur nette IBKR`, le `Budget alloue a Bubo`, `l'exposition geree`, la `Valeur nette geree` et le `Budget utilise`, sans reposer sur un `Capital gere` ambigu.
+- Le parametre `Gestion des profits` permet de choisir entre `fixed` (budget de sizing fixe, profits non reinvestis) et `dynamic` (profits/pertes reinvestis dans le sizing suivant).
 - Les noms d'instruments affiches sont resolves depuis IBKR (ContractDetails), sans fallback externe.
 - Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.
 - `Prix moyen` reste le cout moyen IBKR. Le `P/L` ouvert et le `P/L total` sont recalcules avec le prix live IBKR et l'entree de reference suivie en interne par Bubo.
@@ -409,6 +410,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_IBKR_EXCHANGE` | Routing exchange IBKR | Non (utile si broker=`ibkr`) | Ex: `SMART` | `SMART` |
 | `BUBO_IBKR_CURRENCY` | Devise contrat actions | Non (utile si broker=`ibkr`) | Ex: `USD`, `EUR` | `USD` |
 | `BUBO_IBKR_CAPITAL_LIMIT` | Capital max que BUBO est autorise a gerer sur IBKR | Non | Nombre `> 0` (ex: `10000`) | `10000` |
+| `BUBO_CAPITAL_GROWTH_MODE` | Gestion des profits pour le sizing (`fixed` = budget fige, `dynamic` = reinvestit gains/pertes) | Non | `fixed` ou `dynamic` | `fixed` |
 | `BUBO_IBKR_EXISTING_POSITIONS_POLICY` | Gestion des positions IBKR deja ouvertes | Non | `include` ou `ignore` | `include` |
 | `BUBO_ROTATION_ENABLED` | Autorise la rotation (fermer une position faible pour ouvrir une plus forte si portefeuille plein) | Non | `0` ou `1` | `1` |
 | `BUBO_ROTATION_MIN_EDGE` | Ecart minimal de force signal pour declencher une rotation | Non | Nombre `>= 0` (ex: `12`) | `12` |

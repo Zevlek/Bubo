@@ -44,6 +44,7 @@ class WebAppTests(unittest.TestCase):
                 "paper_state": "data/custom_state.json",
                 "paper_webhook": "https://example.invalid/webhook",
                 "ibkr_capital_limit": 12000,
+                "capital_growth_mode": "dynamic",
                 "ibkr_existing_positions_policy": "ignore",
                 "no_finbert": True,
                 "no_budget_gate": True,
@@ -80,6 +81,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("--ibkr-currency", cmd)
         self.assertIn("--ibkr-capital-limit", cmd)
         self.assertIn("12000.0", cmd)
+        self.assertIn("--capital-growth-mode", cmd)
+        self.assertIn("dynamic", cmd)
         self.assertIn("--ibkr-existing-positions-policy", cmd)
         self.assertIn("ignore", cmd)
         self.assertIn("--no-finbert", cmd)
@@ -107,6 +110,7 @@ class WebAppTests(unittest.TestCase):
                 "ibkr_exchange": "SMART",
                 "ibkr_currency": "USD",
                 "ibkr_capital_limit": 9000,
+                "capital_growth_mode": "fixed",
                 "ibkr_existing_positions_policy": "include",
             },
         )
@@ -126,6 +130,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("DU123", cmd)
         self.assertIn("--ibkr-capital-limit", cmd)
         self.assertIn("9000.0", cmd)
+        self.assertIn("--capital-growth-mode", cmd)
+        self.assertIn("fixed", cmd)
         self.assertIn("--ibkr-existing-positions-policy", cmd)
         self.assertIn("include", cmd)
 

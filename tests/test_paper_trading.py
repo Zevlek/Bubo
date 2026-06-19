@@ -379,6 +379,92 @@ class PaperTradingTests(unittest.TestCase):
             self.assertAlmostEqual(pos["unrealized_pnl"], 79.0)
             self.assertAlmostEqual(summary["unrealized_pnl"], 79.0)
 
+    def test_ibkr_dynamic_budget_reinvests_profits_for_next_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+
+            class _FakeIBKR:
+                def __init__(self, _cfg):
+                    self.cfg = _cfg
+
+                def connect(self):
+                    return None
+
+                def fetch_open_positions(self):
+                    return {"ok": True, "positions": []}
+
+                def place_market_order(self, ticker, side, quantity, reference_price, **_kwargs):
+                    return {
+                        "ok": True,
+                        "filled": int(quantity),
+                        "avg_fill_price": float(reference_price),
+                        "commission": 0.0,
+                        "filled_at": "2026-06-20T15:30:00",
+                        "symbol_name": ticker,
+                    }
+
+                def disconnect(self):
+                    return None
+
+            def _run_with_mode(mode: str) -> tuple[dict, dict]:
+                self.cfg.paper_broker = "ibkr"
+                self.cfg.ibkr_existing_positions_policy = "ignore"
+                self.cfg.ibkr_capital_limit = 10_000.0
+                self.cfg.capital_growth_mode = mode
+                next_signal = {
+                    "BBB": {
+                        "ticker": "BBB",
+                        "decision": "BUY",
+                        "position_size_pct": 0.50,
+                        "final_score": 82.0,
+                        "confidence": 82.0,
+                    }
+                }
+                original_adapter = bubo_engine.IBKRPaperAdapter
+                original_market_clock = bubo_engine.get_us_market_clock
+                try:
+                    bubo_engine.IBKRPaperAdapter = _FakeIBKR
+                    bubo_engine.get_us_market_clock = lambda: {"is_open": True, "seconds_to_close": 3600}
+                    state = load_paper_state(str(state_path), self.cfg)
+                    state["positions"] = {
+                        "AAA": {
+                            "ticker": "AAA",
+                            "name": "AAA",
+                            "shares": 50,
+                            "entry_price": 100.0,
+                            "avg_cost": 100.0,
+                            "entry_fee": 0.0,
+                            "entry_date": "2026-06-19",
+                            "entry_ts": "2026-06-19T15:30:00",
+                            "last_price": 100.0,
+                            "market_value": 5000.0,
+                            "market_value_abs": 5000.0,
+                            "unrealized_pnl": 0.0,
+                            "entry_signal": {"decision": "BUY"},
+                        }
+                    }
+                    bubo_engine.save_paper_state(str(state_path), state)
+                    summary = self._run_cycle(next_signal, {"AAA": 108.0, "BBB": 100.0}, state_path)
+                    persisted = load_paper_state(str(state_path), self.cfg)
+                finally:
+                    bubo_engine.IBKRPaperAdapter = original_adapter
+                    bubo_engine.get_us_market_clock = original_market_clock
+                    self.cfg.paper_broker = "local"
+                    self.cfg.ibkr_existing_positions_policy = "include"
+                    self.cfg.capital_growth_mode = "fixed"
+                return summary, persisted
+
+            summary_fixed, persisted_fixed = _run_with_mode("fixed")
+            state_path.unlink(missing_ok=True)
+            summary_dynamic, persisted_dynamic = _run_with_mode("dynamic")
+
+            self.assertEqual(summary_fixed["capital_growth_mode"], "fixed")
+            self.assertEqual(summary_dynamic["capital_growth_mode"], "dynamic")
+            self.assertAlmostEqual(summary_fixed["managed_capital"], 10_000.0)
+            self.assertAlmostEqual(summary_dynamic["managed_capital"], 10_000.0)
+            self.assertEqual(int(persisted_fixed["positions"]["BBB"]["shares"]), 46)
+            self.assertEqual(int(persisted_dynamic["positions"]["BBB"]["shares"]), 50)
+
     def test_dynamic_universe_cache_reused_on_fd_pressure(self):
         with tempfile.TemporaryDirectory() as tmp:
             universe_path = Path(tmp) / "u.txt"

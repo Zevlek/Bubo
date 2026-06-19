@@ -835,6 +835,13 @@
           </div>
         </div>
 
+        <label class="label" for="capital_growth_mode">Gestion des profits</label>
+        <select id="capital_growth_mode" style="width:100%;border:1px solid #c5d1da;border-radius:10px;padding:9px 10px;background:#fbfdff;">
+          <option value="fixed" {% if defaults.capital_growth_mode == "fixed" %}selected{% endif %}>Budget fixe (ne réinvestit pas les profits)</option>
+          <option value="dynamic" {% if defaults.capital_growth_mode == "dynamic" %}selected{% endif %}>Budget dynamique (réinvestit les profits)</option>
+        </select>
+        <div class="hint">`fixed` garde le budget de référence pour le sizing. `dynamic` laisse les gains et pertes ajuster progressivement les tailles et l'exposition.</div>
+
         <div class="row-2">
           <div>
             <label class="label" for="ibkr_host">Hôte IBKR</label>
@@ -1080,6 +1087,7 @@
         ibkr_exchange: document.getElementById("ibkr_exchange").value.trim(),
         ibkr_currency: document.getElementById("ibkr_currency").value.trim(),
         ibkr_capital_limit: Number(document.getElementById("ibkr_capital_limit").value || 10000),
+        capital_growth_mode: document.getElementById("capital_growth_mode").value,
         ibkr_existing_positions_policy: document.getElementById("ibkr_existing_positions_policy").value,
         paper_enabled: document.getElementById("paper_enabled").checked,
         allow_short: document.getElementById("allow_short").checked,
@@ -1728,6 +1736,8 @@
         const cfg = configPayload();
         const currency = ibkr.currency || "USD";
         const ibkrAvailable = Boolean(ibkr.enabled && ibkr.ok);
+        const capitalGrowthMode = String(cfg.capital_growth_mode || "fixed");
+        const capitalGrowthLabel = capitalGrowthMode === "dynamic" ? "Oui" : "Non";
 
         const paperPositions = Array.isArray(paper.positions) ? paper.positions : [];
         const paperByTicker = new Map(paperPositions.map(p => [String(p.ticker || "").toUpperCase(), p]));
@@ -1833,7 +1843,7 @@
             <div class="kpi-card"><div class="k-label">Exposition gérée</div><div class="k-val">${fmtMoney(managedExposure, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">Valeur nette gérée</div><div class="k-val">${fmtMoney(managedNetValue, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">Budget utilisé</div><div class="k-val">${Number.isFinite(managedUsagePct) ? managedUsagePct.toFixed(1) + "%" : "n/a"}</div></div>
-            <div class="kpi-card"><div class="k-label">Positions pilotées</div><div class="k-val">${latestPositionRows.length}</div></div>
+            <div class="kpi-card"><div class="k-label">Profits réinvestis</div><div class="k-val">${capitalGrowthLabel}</div></div>
           </div>
         `;
         renderPositions();

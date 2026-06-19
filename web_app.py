@@ -116,6 +116,9 @@ _PORTFOLIO_CFG_CACHE: dict[str, Any] = {
 BUDGET_MODE_CUSTOM = "custom"
 BUDGET_MODE_050_SHORT = "budget_050_short"
 _SUPPORTED_BUDGET_MODES = {BUDGET_MODE_CUSTOM, BUDGET_MODE_050_SHORT}
+CAPITAL_GROWTH_MODE_FIXED = "fixed"
+CAPITAL_GROWTH_MODE_DYNAMIC = "dynamic"
+_SUPPORTED_CAPITAL_GROWTH_MODES = {CAPITAL_GROWTH_MODE_FIXED, CAPITAL_GROWTH_MODE_DYNAMIC}
 
 WEB_TIMEZONE = str(os.getenv("BUBO_WEB_TIMEZONE", "Europe/Paris") or "Europe/Paris").strip() or "Europe/Paris"
 try:
@@ -176,6 +179,13 @@ def _normalize_budget_mode(value: Any) -> str:
     return BUDGET_MODE_CUSTOM
 
 
+def _normalize_capital_growth_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in _SUPPORTED_CAPITAL_GROWTH_MODES:
+        return mode
+    return CAPITAL_GROWTH_MODE_FIXED
+
+
 def _apply_budget_mode(cfg: dict[str, Any]) -> dict[str, Any]:
     mode = _normalize_budget_mode(cfg.get("budget_mode", BUDGET_MODE_CUSTOM))
     cfg["budget_mode"] = mode
@@ -202,6 +212,9 @@ def _apply_budget_mode(cfg: dict[str, Any]) -> dict[str, Any]:
 def _build_process_env(cfg: dict[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
     env["BUBO_BUDGET_MODE"] = str(cfg.get("budget_mode", BUDGET_MODE_CUSTOM))
+    env["BUBO_CAPITAL_GROWTH_MODE"] = str(
+        cfg.get("capital_growth_mode", CAPITAL_GROWTH_MODE_FIXED)
+    )
     env["BUBO_GEMINI_MODEL_CHAIN"] = str(cfg.get("gemini_model_chain", "gemini-2.5-flash"))
     env["BUBO_GEMINI_MAX_OUTPUT_TOKENS"] = str(_coerce_int(cfg.get("gemini_max_output_tokens"), 700, minimum=256))
     env["BUBO_GEMINI_THINKING_BUDGET"] = str(_coerce_int(cfg.get("gemini_thinking_budget"), 0, minimum=0))
@@ -2132,6 +2145,9 @@ def get_default_config() -> dict[str, Any]:
             10000.0,
             minimum=1.0,
         ),
+        "capital_growth_mode": _normalize_capital_growth_mode(
+            os.getenv("BUBO_CAPITAL_GROWTH_MODE", CAPITAL_GROWTH_MODE_FIXED)
+        ),
         "ibkr_existing_positions_policy": os.getenv("BUBO_IBKR_EXISTING_POSITIONS_POLICY", "include"),
         "no_finbert": _env_bool("BUBO_NO_FINBERT", True),
         "no_budget_gate": _env_bool("BUBO_NO_BUDGET_GATE", False),
@@ -2177,6 +2193,8 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg["ibkr_currency"] = str(payload.get("ibkr_currency") or "").strip().upper()
     if "ibkr_existing_positions_policy" in payload:
         cfg["ibkr_existing_positions_policy"] = str(payload.get("ibkr_existing_positions_policy") or "").strip().lower()
+    if "capital_growth_mode" in payload:
+        cfg["capital_growth_mode"] = _normalize_capital_growth_mode(payload.get("capital_growth_mode"))
 
     cfg["preselect_top"] = _coerce_int(payload.get("preselect_top", cfg["preselect_top"]), cfg["preselect_top"], minimum=1)
     cfg["max_deep"] = _coerce_int(payload.get("max_deep", cfg["max_deep"]), cfg["max_deep"], minimum=1)
@@ -2239,6 +2257,9 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["paper_broker"] = "ibkr"
     if cfg["ibkr_existing_positions_policy"] not in {"include", "ignore"}:
         cfg["ibkr_existing_positions_policy"] = "include"
+    cfg["capital_growth_mode"] = _normalize_capital_growth_mode(
+        cfg.get("capital_growth_mode", CAPITAL_GROWTH_MODE_FIXED)
+    )
     return _apply_budget_mode(cfg)
 
 
@@ -2304,6 +2325,7 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
     cmd.extend(["--ibkr-exchange", str(cfg["ibkr_exchange"])])
     cmd.extend(["--ibkr-currency", str(cfg["ibkr_currency"])])
     cmd.extend(["--ibkr-capital-limit", str(cfg["ibkr_capital_limit"])])
+    cmd.extend(["--capital-growth-mode", str(cfg["capital_growth_mode"])])
     cmd.extend(["--ibkr-existing-positions-policy", str(cfg["ibkr_existing_positions_policy"])])
     if cfg["no_finbert"]:
         cmd.append("--no-finbert")
