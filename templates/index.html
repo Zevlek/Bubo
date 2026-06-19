@@ -1725,6 +1725,7 @@
         const paper = data.paper || {};
         const ibkr = data.ibkr || {};
         const summary = ibkr.account_summary || {};
+        const cfg = configPayload();
         const currency = ibkr.currency || "USD";
         const ibkrAvailable = Boolean(ibkr.enabled && ibkr.ok);
 
@@ -1803,6 +1804,18 @@
             currency
           };
         });
+        const managedBudget = ibkrAvailable
+          ? asNumber(cfg.ibkr_capital_limit, asNumber(paper.equity, 0))
+          : asNumber(cfg.capital, asNumber(paper.equity, 0));
+        const managedNetValue = latestPositionRows.reduce(
+          (acc, row) => acc + asNumber(row.value, 0),
+          0
+        );
+        const managedExposure = latestPositionRows.reduce(
+          (acc, row) => acc + Math.abs(asNumber(row.value, 0)),
+          0
+        );
+        const managedUsagePct = managedBudget > 0 ? (managedExposure / managedBudget) * 100 : NaN;
         const totalPnl = paperRealized + latestPositionRows.reduce(
           (acc, row) => acc + asNumber(row.pnl, 0),
           0
@@ -1811,10 +1824,16 @@
           <div class="kpi"><strong>Compte:</strong> ${accountText} | <strong>Latence:</strong> ${latencyText}</div>
           ${warningText ? `<div class="kpi"><strong>Note:</strong> ${escapeHtml(warningText)} (historique local Bubo affiche)</div>` : ""}
           <div class="kpi-line">
-            <div class="kpi-card"><div class="k-label">Valeur nette</div><div class="k-val">${netLiqText}</div></div>
-            <div class="kpi-card"><div class="k-label">Liquidités</div><div class="k-val">${cashText}</div></div>
-            <div class="kpi-card"><div class="k-label">Capital géré</div><div class="k-val">${fmtMoney(paper.equity, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Valeur nette IBKR</div><div class="k-val">${netLiqText}</div></div>
+            <div class="kpi-card"><div class="k-label">Liquidités IBKR</div><div class="k-val">${cashText}</div></div>
+            <div class="kpi-card"><div class="k-label">Budget alloué à Bubo</div><div class="k-val">${fmtMoney(managedBudget, currency)}</div></div>
             <div class="kpi-card"><div class="k-label">P/L total</div><div class="k-val ${pnlClass(totalPnl)}">${fmtSignedMoney(totalPnl, currency)}</div></div>
+          </div>
+          <div class="kpi-line">
+            <div class="kpi-card"><div class="k-label">Exposition gérée</div><div class="k-val">${fmtMoney(managedExposure, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Valeur nette gérée</div><div class="k-val">${fmtMoney(managedNetValue, currency)}</div></div>
+            <div class="kpi-card"><div class="k-label">Budget utilisé</div><div class="k-val">${Number.isFinite(managedUsagePct) ? managedUsagePct.toFixed(1) + "%" : "n/a"}</div></div>
+            <div class="kpi-card"><div class="k-label">Positions pilotées</div><div class="k-val">${latestPositionRows.length}</div></div>
           </div>
         `;
         renderPositions();

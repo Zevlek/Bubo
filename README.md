@@ -47,6 +47,7 @@ Si le NAS renvoie une erreur du type `nvidia-container-cli: initialization error
 - Le diagnostic API/IBKR est manuel et repliable (bouton `Verifier les API` puis `Masquer les API`).
 - Le panneau `Logs en direct` permet de choisir la profondeur (300 a 10 000 lignes), avec remontee depuis le log persistant.
 - Le portefeuille est presente en vue unique IBKR: quantite, prix moyen (avec infobulle d'explication), cours actuel, valeur, P/L colore et ligne `TOTAL` avec `Valeur nette` + `Exposition`.
+- Les KPI du portefeuille distinguent maintenant la `Valeur nette IBKR`, le `Budget alloue a Bubo`, `l'exposition geree`, la `Valeur nette geree` et le `Budget utilise`, sans reposer sur un `Capital gere` ambigu.
 - Les noms d'instruments affiches sont resolves depuis IBKR (ContractDetails), sans fallback externe.
 - Le calcul `Valeur`/`P/L` utilise un fallback robuste (prix live IBKR, puis prix moyen) pour eviter les `0`/`n/a` transitoires.
 - `Prix moyen` reste le cout moyen IBKR. Le `P/L` ouvert et le `P/L total` sont recalcules avec le prix live IBKR et l'entree de reference suivie en interne par Bubo.
