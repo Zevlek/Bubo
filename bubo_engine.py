@@ -160,7 +160,7 @@ class EngineConfig:
     backtest_period_years: int = 2
     watch_interval_min: int = 30
     us_market_only: bool = True
-    analyze_when_us_closed: bool = True
+    analyze_when_us_closed: bool = False
     use_finbert: bool = True
     decision_engine: str = "llm"  # llm | rules
     paper_broker: str = "local"  # local | ibkr
@@ -3430,7 +3430,7 @@ def main():
     parser.add_argument(
         "--analyze-when-us-closed",
         action=argparse.BooleanOptionalAction,
-        default=str(os.getenv("BUBO_ANALYZE_WHEN_US_CLOSED", "1")).strip().lower() in {"1", "true", "yes", "on"},
+        default=str(os.getenv("BUBO_ANALYZE_WHEN_US_CLOSED", "0")).strip().lower() in {"1", "true", "yes", "on"},
         help="Si session US fermee: continue l'analyse (FinBERT/LLM) sans executer d'ordres.",
     )
     parser.add_argument("--screen-only", action="store_true",

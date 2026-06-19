@@ -2127,7 +2127,7 @@ def get_default_config() -> dict[str, Any]:
         "max_deep": _coerce_int(os.getenv("BUBO_MAX_DEEP", "8"), 8, minimum=1),
         "watch_interval_min": _coerce_int(os.getenv("BUBO_WATCH_INTERVAL_MIN", "30"), 30, minimum=1),
         "us_market_only": _env_bool("BUBO_US_MARKET_ONLY", True),
-        "analyze_when_us_closed": _env_bool("BUBO_ANALYZE_WHEN_US_CLOSED", True),
+        "analyze_when_us_closed": _env_bool("BUBO_ANALYZE_WHEN_US_CLOSED", False),
         "capital": _coerce_float(os.getenv("BUBO_CAPITAL", "10000"), 10000.0, minimum=1.0),
         "allow_short": _env_bool("BUBO_ALLOW_SHORT", False),
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),

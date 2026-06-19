@@ -64,7 +64,7 @@ Si le NAS renvoie une erreur du type `nvidia-container-cli: initialization error
 - Un tableau `Sante LLM` affiche les erreurs par jour (volume, taux d'erreur, top erreur, modele dominant).
 - Un indicateur "Marche US" affiche l'heure de New York et la prochaine ouverture/fermeture.
 - Le mode watch US-only tient compte des jours feries US standards (NYSE/Nasdaq).
-- En mode hybride (`BUBO_US_MARKET_ONLY=1` + `BUBO_ANALYZE_WHEN_US_CLOSED=1`), Bubo continue les analyses hors session mais n'envoie aucun ordre.
+- Par defaut, hors session US, Bubo ne lance ni analyse LLM ni ordre. Le mode hybride reste possible avec `BUBO_US_MARKET_ONLY=1` + `BUBO_ANALYZE_WHEN_US_CLOSED=1`.
 - En mode univers dynamique, les positions deja ouvertes sont automatiquement reinjectees dans la liste d'analyse detaillee (safety include), meme hors top preselection.
 
 ## Observabilite (logs JSONL)
@@ -149,7 +149,7 @@ services:
       BUBO_UNIVERSE_MUTE_BACKOFF: ${BUBO_UNIVERSE_MUTE_BACKOFF:-1}
       BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS: ${BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS:-45}
       BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
-      BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-1}
+      BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-0}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -258,7 +258,7 @@ services:
       BUBO_UNIVERSE_MUTE_BACKOFF: ${BUBO_UNIVERSE_MUTE_BACKOFF:-1}
       BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS: ${BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS:-45}
       BUBO_US_MARKET_ONLY: ${BUBO_US_MARKET_ONLY:-1}
-      BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-1}
+      BUBO_ANALYZE_WHEN_US_CLOSED: ${BUBO_ANALYZE_WHEN_US_CLOSED:-0}
       BUBO_CAPITAL: ${BUBO_CAPITAL:-10000}
       BUBO_PAPER_ENABLED: ${BUBO_PAPER_ENABLED:-1}
       BUBO_PAPER_STATE: ${BUBO_PAPER_STATE:-data/paper_portfolio_state.json}
@@ -394,7 +394,7 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_UNIVERSE_MUTE_BACKOFF` | Active le backoff exponentiel de pause (24h, 48h, 96h...) apres echecs repetes | Non | `0` ou `1` | `1` |
 | `BUBO_UNIVERSE_HEALTH_MAX_AGE_DAYS` | Retention max des stats de sante ticker (nettoyage auto des entrees anciennes) | Non | Entier `>= 7` (jours) | `45` |
 | `BUBO_US_MARKET_ONLY` | En mode watch, n'execute les cycles que pendant la session reguliere US | Non | `0` ou `1` | `1` |
-| `BUBO_ANALYZE_WHEN_US_CLOSED` | Si marche US ferme: continue l'analyse (FinBERT/LLM), mais bloque les ordres | Non | `0` ou `1` | `1` |
+| `BUBO_ANALYZE_WHEN_US_CLOSED` | Si marche US ferme: continue l'analyse (FinBERT/LLM), mais bloque les ordres | Non | `0` ou `1` | `0` |
 | `BUBO_CAPITAL` | Capital paper trading | Non | Nombre `> 0` (ex: `10000`) | `10000` |
 | `BUBO_ALLOW_SHORT` | Autorise les shorts (SELL d'ouverture) | Non | `0` ou `1` | `0` |
 | `BUBO_MAX_OPEN_POSITIONS` | Nombre maximal de positions ouvertes simultanement | Non | Entier `>= 1` | `6` |
