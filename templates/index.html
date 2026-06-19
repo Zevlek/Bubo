@@ -542,6 +542,20 @@
       font-weight: 700;
     }
 
+    tr.positions-total-row td {
+      background: #eef7f5;
+      border-top: 2px solid #9ccfca;
+      border-bottom: 0;
+      color: #173749;
+      font-weight: 700;
+    }
+
+    tr.positions-total-row td:first-child {
+      color: #0f6762;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
     .table-wrap h3 {
       margin: 0;
       padding: 8px 10px;
@@ -1370,7 +1384,20 @@
         return;
       }
       const rows = sortRowsForTable(latestPositionRows, "positions");
-      portfolioPosBodyEl.innerHTML = rows.slice(0, 60).map(pos => {
+      const displayRows = rows.slice(0, 60);
+      const totalValue = latestPositionRows.reduce((acc, row) => {
+        const value = maybeNumber(row.value);
+        return acc + (Number.isFinite(value) ? Math.abs(value) : 0);
+      }, 0);
+      const totalPnl = latestPositionRows.reduce((acc, row) => {
+        const pnl = maybeNumber(row.pnl);
+        return acc + (Number.isFinite(pnl) ? pnl : 0);
+      }, 0);
+      const totalCurrency = String(
+        latestPositionRows.find(row => row && row.currency)?.currency || "USD"
+      );
+      const totalPnlClassName = pnlClass(totalPnl);
+      const bodyRows = displayRows.map(pos => {
         const qty = asNumber(pos.quantity, 0);
         const avgCost = maybeNumber(pos.avg_cost);
         const currentPrice = maybeNumber(pos.current_price);
@@ -1390,6 +1417,18 @@
           </tr>
         `;
       }).join("");
+      const totalRow = `
+        <tr class="positions-total-row">
+          <td data-label="Nom">TOTAL</td>
+          <td data-label="Symbole">${latestPositionRows.length} position${latestPositionRows.length > 1 ? "s" : ""}</td>
+          <td data-label="Quantité">-</td>
+          <td data-label="Prix moyen">-</td>
+          <td data-label="Cours actuel">-</td>
+          <td data-label="Valeur">${fmtMoney(totalValue, totalCurrency)}</td>
+          <td data-label="P/L" class="${totalPnlClassName}">${fmtSignedMoney(totalPnl, totalCurrency)}</td>
+        </tr>
+      `;
+      portfolioPosBodyEl.innerHTML = `${bodyRows}${totalRow}`;
     }
 
     function renderTransactions() {
