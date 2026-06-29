@@ -17,6 +17,13 @@ from typing import Optional
 import warnings
 warnings.filterwarnings('ignore')
 
+_YFINANCE_SYMBOL_ALIASES = {
+    "BRK.A": "BRK-A",
+    "BRK.B": "BRK-B",
+    "BF.A": "BF-A",
+    "BF.B": "BF-B",
+}
+
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -87,8 +94,9 @@ class MarketDataFetcher:
         """Télécharge et nettoie les données pour un ticker."""
         try:
             params = self.TIMEFRAMES.get(timeframe, self.TIMEFRAMES["1d"])
+            provider_ticker = _YFINANCE_SYMBOL_ALIASES.get(str(ticker).strip().upper(), ticker)
             df = yf.download(
-                ticker,
+                provider_ticker,
                 period=params["period"],
                 interval=params["interval"],
                 progress=False,

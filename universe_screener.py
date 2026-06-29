@@ -77,6 +77,7 @@ class ScreenerConfig:
     timeframe: str = "1d"
     min_bars: int = 30
     top_n: int = 20
+    max_last_bar_age_days: int = 7
 
     # Weighting for movement score
     w_abs_ret_1d: float = 1.8
@@ -114,6 +115,20 @@ class UniverseScreener:
             if df is None or len(df) < self.cfg.min_bars:
                 self.last_failures.add(tk)
                 continue
+            max_age_days = int(getattr(self.cfg, "max_last_bar_age_days", 7) or 0)
+            if max_age_days > 0:
+                try:
+                    last_bar = pd.to_datetime(df.index[-1])
+                    if getattr(last_bar, "tzinfo", None) is not None:
+                        now = pd.Timestamp.now(tz=last_bar.tzinfo)
+                    else:
+                        now = pd.Timestamp.now()
+                    age_days = int((now.normalize() - last_bar.normalize()).days)
+                except Exception:
+                    age_days = 0
+                if age_days > max_age_days:
+                    self.last_failures.add(tk)
+                    continue
             self.last_successes.add(tk)
 
             close = df["Close"]

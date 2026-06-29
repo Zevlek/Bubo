@@ -74,6 +74,7 @@ class SocialConfig:
     max_posts_per_source: int = 100
     bot_filter_enabled: bool = True
     cache_ttl_minutes: int = 30
+    reddit_rate_limit_cooldown_seconds: int = 900
 
     # Poids dans le score final
     reddit_weight: float = 0.60
@@ -193,13 +194,20 @@ def load_config(path: str = "social_config.json") -> SocialConfig:
         "reddit_client_id": ["BUBO_REDDIT_CLIENT_ID", "REDDIT_CLIENT_ID"],
         "reddit_client_secret": ["BUBO_REDDIT_CLIENT_SECRET", "REDDIT_CLIENT_SECRET"],
         "reddit_user_agent": ["BUBO_REDDIT_USER_AGENT", "REDDIT_USER_AGENT"],
+        "reddit_rate_limit_cooldown_seconds": ["BUBO_REDDIT_RATE_LIMIT_COOLDOWN_SECONDS"],
         "stocktwits_base_url": ["BUBO_STOCKTWITS_BASE_URL", "STOCKTWITS_BASE_URL"],
     }
     for attr, names in env_map.items():
         for name in names:
             val = os.environ.get(name, "")
             if str(val).strip():
-                setattr(cfg, attr, str(val).strip())
+                if attr == "reddit_rate_limit_cooldown_seconds":
+                    try:
+                        setattr(cfg, attr, max(30, int(val)))
+                    except Exception:
+                        pass
+                else:
+                    setattr(cfg, attr, str(val).strip())
                 break
 
     raw_reddit_enabled = os.environ.get("BUBO_REDDIT_ENABLED", os.environ.get("REDDIT_ENABLED", ""))
@@ -250,6 +258,7 @@ class RedditFetcher:
     def __init__(self, cfg: SocialConfig):
         self.cfg = cfg
         self.reddit = None
+        self._public_json_disabled_until: datetime | None = None
         self._init_reddit()
 
     def _init_reddit(self):
@@ -390,8 +399,13 @@ class RedditFetcher:
         cutoff = datetime.now() - timedelta(hours=self.cfg.lookback_hours)
         seen_titles = set()
         all_keywords = kw_precise + kw_broad[:2]
+        if self._public_json_disabled_until and datetime.now() < self._public_json_disabled_until:
+            wait_s = int((self._public_json_disabled_until - datetime.now()).total_seconds())
+            print(f"    ⚠️  Reddit rate limit actif — skip public JSON ({max(1, wait_s // 60)}m)")
+            return posts
 
         for sub_name in subreddits[:6]:
+            rate_limited = False
             for kw in all_keywords[:3]:
                 try:
                     query = urllib.parse.quote(kw)
@@ -435,11 +449,16 @@ class RedditFetcher:
 
                 except urllib.error.HTTPError as e:
                     if e.code == 429:
-                        print(f"    ⚠️  Reddit rate limit — pause 5s")
-                        time.sleep(5)
+                        cooldown_s = max(30, int(getattr(self.cfg, "reddit_rate_limit_cooldown_seconds", 900) or 900))
+                        self._public_json_disabled_until = datetime.now() + timedelta(seconds=cooldown_s)
+                        print(f"    ⚠️  Reddit rate limit — public JSON suspendu {max(1, cooldown_s // 60)}m")
+                        rate_limited = True
+                        break
                     continue
                 except Exception:
                     continue
+            if rate_limited:
+                break
 
         return posts[:self.cfg.max_posts_per_source]
 

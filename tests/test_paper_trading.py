@@ -136,6 +136,28 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertTrue(any("stop_loss" in a for a in summary["actions"]))
 
+    def test_stop_loss_cooldown_blocks_same_cycle_reentry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+
+            buy_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 75.0,
+                    "confidence": 75.0,
+                }
+            }
+            self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
+
+            summary = self._run_cycle(buy_signal, {"AAA": 97.0}, state_path)
+            self.assertEqual(summary["positions"], 0)
+            self.assertTrue(any("SELL AAA" in a and "stop_loss" in a for a in summary["actions"]))
+            self.assertEqual(summary["no_trade_reasons"].get("stop-loss cooldown"), 1)
+            persisted = load_paper_state(str(state_path), self.cfg)
+            self.assertIn("AAA", persisted["entry_cooldowns"])
+
     def test_trading_gate_pauses_orders_but_keeps_mark_to_market(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "paper_state.json"
@@ -312,6 +334,7 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertEqual(summary["actions"], [])
             self.assertTrue(any("IBKR unavailable" in w for w in summary.get("warnings", [])))
+            self.assertEqual(summary["no_trade_reasons"].get("ibkr unavailable"), 1)
 
     def test_ibkr_sync_preserves_bubo_entry_price_for_open_position(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -378,6 +401,58 @@ class PaperTradingTests(unittest.TestCase):
             self.assertAlmostEqual(pos["avg_cost"], 105.0)
             self.assertAlmostEqual(pos["unrealized_pnl"], 79.0)
             self.assertAlmostEqual(summary["unrealized_pnl"], 79.0)
+
+    def test_ibkr_sync_moves_non_strategy_positions_to_unmanaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+            self.cfg.paper_broker = "ibkr"
+            self.cfg.ibkr_existing_positions_policy = "include"
+
+            class _FakeIBKR:
+                def __init__(self, _cfg):
+                    pass
+
+                def connect(self):
+                    return None
+
+                def fetch_open_positions(self):
+                    return {
+                        "ok": True,
+                        "positions": [
+                            {
+                                "ticker": "AAA",
+                                "name": "AAA Corp",
+                                "shares": 10,
+                                "avg_cost": 100.0,
+                                "market_price": 101.0,
+                            },
+                            {
+                                "ticker": "HOLX.CVR",
+                                "name": "HOLOGIC INC - CVR",
+                                "shares": 22,
+                                "avg_cost": 0.05,
+                                "market_price": 0.01,
+                            },
+                        ],
+                    }
+
+                def disconnect(self):
+                    return None
+
+            original_adapter = bubo_engine.IBKRPaperAdapter
+            try:
+                bubo_engine.IBKRPaperAdapter = _FakeIBKR
+                summary = self._run_cycle({}, {"AAA": 101.0, "HOLX.CVR": 0.01}, state_path)
+            finally:
+                bubo_engine.IBKRPaperAdapter = original_adapter
+                self.cfg.paper_broker = "local"
+                self.cfg.ibkr_existing_positions_policy = "include"
+
+            persisted = load_paper_state(str(state_path), self.cfg)
+            self.assertEqual(summary["positions"], 1)
+            self.assertIn("AAA", persisted["positions"])
+            self.assertNotIn("HOLX.CVR", persisted["positions"])
+            self.assertIn("HOLX.CVR", persisted["unmanaged_positions"])
 
     def test_ibkr_sync_missing_market_price_uses_market_data_not_avg_cost(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -670,6 +745,46 @@ class PaperTradingTests(unittest.TestCase):
             "IBKR entry gate: market closed; next open 2026-04-24 09:30:00"
         )
         self.assertIsNone(parsed)
+
+    def test_log_cycle_outputs_deduplicates_structured_order_and_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            original_engine_log = bubo_engine.ENGINE_CYCLE_LOG_PATH
+            original_llm_log = bubo_engine.LLM_CALLS_LOG_PATH
+            original_orders_log = bubo_engine.ORDERS_LOG_PATH
+            try:
+                bubo_engine.ENGINE_CYCLE_LOG_PATH = base / "engine_cycle.jsonl"
+                bubo_engine.LLM_CALLS_LOG_PATH = base / "llm_calls.jsonl"
+                bubo_engine.ORDERS_LOG_PATH = base / "orders.jsonl"
+                bubo_engine.log_cycle_outputs(
+                    results={},
+                    summary={
+                        "paper_broker": "ibkr",
+                        "equity": 10000.0,
+                        "cash": 10000.0,
+                        "positions": 0,
+                        "actions": [],
+                        "warnings": ["IBKR BUY AAA skipped: not filled (status=Cancelled); attempts=3"],
+                        "order_events": [
+                            {
+                                "broker": "ibkr",
+                                "side": "BUY",
+                                "ticker": "AAA",
+                                "quantity": 10,
+                                "filled_shares": 0,
+                                "status": "skipped",
+                                "reason": "not filled (status=Cancelled); attempts=3",
+                            }
+                        ],
+                    },
+                )
+            finally:
+                bubo_engine.ENGINE_CYCLE_LOG_PATH = original_engine_log
+                bubo_engine.LLM_CALLS_LOG_PATH = original_llm_log
+                bubo_engine.ORDERS_LOG_PATH = original_orders_log
+
+            rows = (base / "orders.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(rows), 1)
 
     def test_notify_webhook_skips_when_no_actions(self):
         ok, reason = notify_paper_webhook(

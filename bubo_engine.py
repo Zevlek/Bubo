@@ -144,6 +144,7 @@ class EngineConfig:
 
     # Risk
     stop_loss_pct: float = 0.02
+    stop_loss_cooldown_days: int = 1
     take_profit_pct: float = 0.10
     trade_fee_bps: float = 5.0      # 5 bps commission per side
     slippage_bps: float = 5.0       # 5 bps slippage per side
@@ -1295,6 +1296,8 @@ def _new_paper_state(cfg: EngineConfig) -> dict:
         "equity": capital,
         "realized_pnl": 0.0,
         "positions": {},
+        "unmanaged_positions": {},
+        "entry_cooldowns": {},
         "trades": [],
         "equity_curve": [],
         "action_log": [],
@@ -1316,6 +1319,10 @@ def load_paper_state(state_path: str, cfg: EngineConfig) -> dict:
     base.update(data if isinstance(data, dict) else {})
     if not isinstance(base.get("positions"), dict):
         base["positions"] = {}
+    if not isinstance(base.get("unmanaged_positions"), dict):
+        base["unmanaged_positions"] = {}
+    if not isinstance(base.get("entry_cooldowns"), dict):
+        base["entry_cooldowns"] = {}
     if not isinstance(base.get("trades"), list):
         base["trades"] = []
     if not isinstance(base.get("equity_curve"), list):
@@ -2124,7 +2131,17 @@ def log_cycle_outputs(results: dict,
                 str(event.get("commission", "")),
             )
 
+        def _order_event_semantic_key(event: dict) -> tuple:
+            return (
+                str(event.get("broker", "")),
+                str(event.get("side", "")),
+                str(event.get("ticker", "")),
+                str(event.get("status", "")),
+                str(event.get("reason", "")),
+            )
+
         seen_order_keys: set[tuple] = set()
+        seen_order_semantic_keys: set[tuple] = set()
         deduped_order_events: list[dict] = []
         for ev in order_events:
             if not isinstance(ev, dict):
@@ -2133,6 +2150,7 @@ def log_cycle_outputs(results: dict,
             if k in seen_order_keys:
                 continue
             seen_order_keys.add(k)
+            seen_order_semantic_keys.add(_order_event_semantic_key(ev))
             deduped_order_events.append(ev)
         order_events = deduped_order_events
 
@@ -2162,14 +2180,17 @@ def log_cycle_outputs(results: dict,
                 if k in seen_order_keys:
                     continue
                 seen_order_keys.add(k)
+                seen_order_semantic_keys.add(_order_event_semantic_key(ev))
                 order_events.append(ev)
         for warning in summary.get("warnings", []) or []:
             parsed = _extract_ibkr_warning_event(str(warning))
             if parsed is not None:
                 k = _order_event_key(parsed)
-                if k in seen_order_keys:
+                sk = _order_event_semantic_key(parsed)
+                if k in seen_order_keys or sk in seen_order_semantic_keys:
                     continue
                 seen_order_keys.add(k)
+                seen_order_semantic_keys.add(sk)
                 order_events.append(parsed)
 
         for event in order_events:
@@ -2606,6 +2627,8 @@ def run_paper_cycle(engine: ScoringEngine,
     slippage_rate = cfg.slippage_bps / 10_000
 
     positions = state["positions"]
+    unmanaged_positions = state["unmanaged_positions"]
+    entry_cooldowns = state["entry_cooldowns"]
     actions = []
     order_events = []
     warnings_list = []
@@ -2618,6 +2641,48 @@ def run_paper_cycle(engine: ScoringEngine,
         warnings_list.append(f"Trading gate: {trading_pause_reason}")
     price_cache = {}
     empty_sync_streak = int(state.get("ibkr_empty_sync_streak", 0) or 0)
+    today = _now_dt().date()
+
+    if not isinstance(unmanaged_positions, dict):
+        unmanaged_positions = {}
+        state["unmanaged_positions"] = unmanaged_positions
+    if not isinstance(entry_cooldowns, dict):
+        entry_cooldowns = {}
+        state["entry_cooldowns"] = entry_cooldowns
+
+    for tk in list(positions.keys()):
+        if not _is_strategy_ticker(tk):
+            unmanaged_positions[tk] = positions.pop(tk)
+
+    for tk, raw_until in list(entry_cooldowns.items()):
+        try:
+            blocked_until = date.fromisoformat(str(raw_until)[:10])
+        except Exception:
+            blocked_until = today
+        if blocked_until <= today:
+            entry_cooldowns.pop(tk, None)
+
+    def _count_no_trade(reason: str):
+        no_trade_reasons[str(reason or "unknown")] += 1
+
+    def _cooldown_blocked(ticker: str) -> bool:
+        raw_until = entry_cooldowns.get(str(ticker or "").strip().upper())
+        if not raw_until:
+            return False
+        try:
+            blocked_until = date.fromisoformat(str(raw_until)[:10])
+        except Exception:
+            return False
+        return blocked_until > today
+
+    def _set_stop_loss_cooldown(ticker: str):
+        days = max(0, int(getattr(cfg, "stop_loss_cooldown_days", 1) or 0))
+        if days <= 0:
+            return
+        tk = str(ticker or "").strip().upper()
+        if not tk:
+            return
+        entry_cooldowns[tk] = (today + timedelta(days=days)).isoformat()
 
     def _clean_text_list(values: object, *, limit: int = 4, max_len: int = 280) -> list[str]:
         out: list[str] = []
@@ -2670,12 +2735,24 @@ def run_paper_cycle(engine: ScoringEngine,
             sync = ibkr.fetch_open_positions()
             if sync.get("ok"):
                 synced: dict[str, dict[str, Any]] = {}
+                unmanaged_positions.clear()
                 for p in sync.get("positions", []) or []:
                     if not isinstance(p, dict):
                         continue
                     ticker = str(p.get("ticker", "")).strip().upper()
                     shares = int(p.get("shares", 0) or 0)
                     if not ticker or shares == 0:
+                        continue
+                    if not _is_strategy_ticker(ticker):
+                        unmanaged_positions[ticker] = {
+                            "ticker": ticker,
+                            "name": str(p.get("name", "") or ticker).strip() or ticker,
+                            "shares": int(shares),
+                            "avg_cost": float(p.get("avg_cost", 0.0) or 0.0),
+                            "last_price": float(p.get("market_price", 0.0) or 0.0),
+                            "source": "ibkr",
+                            "managed_by_bubo": False,
+                        }
                         continue
                     if shares < 0 and not cfg.allow_short:
                         continue
@@ -2744,6 +2821,8 @@ def run_paper_cycle(engine: ScoringEngine,
                     positions.clear()
                     positions.update(synced)
                     empty_sync_streak = 0
+                if unmanaged_positions:
+                    state["unmanaged_positions"] = unmanaged_positions
             else:
                 warnings_list.append(
                     f"IBKR positions sync failed: {sync.get('reason', 'unknown')}"
@@ -2882,6 +2961,7 @@ def run_paper_cycle(engine: ScoringEngine,
 
         if broker == "ibkr":
             if ibkr is None or ibkr_trading_disabled:
+                _count_no_trade("ibkr unavailable")
                 return False
             order_res = ibkr.place_market_order(
                 ticker,
@@ -2971,6 +3051,8 @@ def run_paper_cycle(engine: ScoringEngine,
                 "reason": exit_reason,
             }
         )
+        if exit_reason == "stop_loss":
+            _set_stop_loss_cooldown(ticker)
         positions.pop(ticker, None)
         return True
 
@@ -3057,14 +3139,14 @@ def run_paper_cycle(engine: ScoringEngine,
 
     rotation_count = 0
 
-    def _count_no_trade(reason: str):
-        no_trade_reasons[str(reason or "unknown")] += 1
-
     for _rank_score, _conf, side, r in candidate_rows:
         ticker = str(r.get("ticker", "")).strip().upper()
         if not ticker or ticker in positions:
             if ticker in positions:
                 _count_no_trade("already in portfolio")
+            continue
+        if _cooldown_blocked(ticker):
+            _count_no_trade("stop-loss cooldown")
             continue
 
         target_pct = float(r.get("position_size_pct", 0.0) or 0.0)
@@ -3164,6 +3246,7 @@ def run_paper_cycle(engine: ScoringEngine,
 
         if broker == "ibkr":
             if ibkr is None or ibkr_trading_disabled:
+                _count_no_trade("ibkr unavailable")
                 continue
             order_side = "SELL" if is_short_entry else "BUY"
             order_res = ibkr.place_market_order(
@@ -3570,6 +3653,12 @@ def main():
     parser.add_argument("--no-budget-gate", action="store_true",
                         help="Desactive la limite automatique liee aux budgets API")
     parser.add_argument("--capital", type=float, default=10000)
+    parser.add_argument(
+        "--stop-loss-cooldown-days",
+        type=int,
+        default=int(os.getenv("BUBO_STOP_LOSS_COOLDOWN_DAYS", "1")),
+        help="Nombre de jours calendaires pendant lesquels une nouvelle entree est bloquee apres stop-loss.",
+    )
     parser.add_argument("--no-finbert", action="store_true")
     parser.add_argument(
         "--allow-short",
@@ -3694,6 +3783,7 @@ def main():
 
     cfg = EngineConfig()
     cfg.initial_capital = args.capital
+    cfg.stop_loss_cooldown_days = max(0, int(args.stop_loss_cooldown_days))
     cfg.watch_interval_min = max(1, int(args.watch_interval_min))
     cfg.us_market_only = bool(args.us_market_only)
     cfg.analyze_when_us_closed = bool(args.analyze_when_us_closed)

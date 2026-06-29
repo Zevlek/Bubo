@@ -23,8 +23,10 @@ class DummyFetcher:
 
 
 def make_df(last_close: float, prev_close: float, prev5_close: float,
-            last_vol: float, base_vol: float, n: int = 40) -> pd.DataFrame:
-    idx = pd.date_range("2025-01-01", periods=n, freq="D")
+            last_vol: float, base_vol: float, n: int = 40,
+            end: str | pd.Timestamp | None = None) -> pd.DataFrame:
+    end_ts = pd.Timestamp.today().normalize() if end is None else pd.Timestamp(end)
+    idx = pd.date_range(end=end_ts, periods=n, freq="D")
     close = np.full(n, 100.0)
     close[-6] = prev5_close
     close[-2] = prev_close
@@ -66,6 +68,21 @@ class UniverseScreenerTests(unittest.TestCase):
         self.assertGreater(ranked.iloc[0]["screen_score"], ranked.iloc[1]["screen_score"])
         self.assertIn("volume_z20", ranked.columns)
         self.assertIn("volume_pctile_60", ranked.columns)
+
+    def test_screen_filters_stale_last_bar(self):
+        df_fresh = make_df(last_close=110.0, prev_close=100.0, prev5_close=95.0,
+                           last_vol=8_000, base_vol=1_000)
+        df_stale = make_df(last_close=130.0, prev_close=100.0, prev5_close=90.0,
+                           last_vol=10_000, base_vol=1_000, end="2000-01-31")
+
+        screener = UniverseScreener(
+            ScreenerConfig(top_n=2, max_last_bar_age_days=7),
+            fetcher=DummyFetcher({"FRESH": df_fresh, "STALE": df_stale}),
+        )
+        ranked = screener.screen(["FRESH", "STALE"], top_n=2)
+
+        self.assertEqual(list(ranked["ticker"]), ["FRESH"])
+        self.assertIn("STALE", screener.last_failures)
 
     def test_budget_manager_caps_selected_tickers(self):
         ranked = pd.DataFrame(
