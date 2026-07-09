@@ -278,6 +278,7 @@ class DataCollector:
         row = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else row
 
+        returns_1d = ((row["Close"] / prev["Close"]) - 1) * 100 if len(df) > 1 and prev["Close"] else 0
         returns_5d = ((row["Close"] / df.iloc[-6]["Close"]) - 1) * 100 if len(df) > 6 else 0
         returns_20d = ((row["Close"] / df.iloc[-21]["Close"]) - 1) * 100 if len(df) > 21 else 0
 
@@ -299,6 +300,7 @@ class DataCollector:
 
         return {
             "prix_actuel": safe(row["Close"]),
+            "rendement_1j_pct": safe(returns_1d),
             "rendement_5j_pct": safe(returns_5d),
             "rendement_20j_pct": safe(returns_20d),
             "rsi": safe(row.get("rsi", 50)),
@@ -666,7 +668,7 @@ class GeminiBrain:
         tech = data.get("technical", {})
         if tech and "error" not in tech:
             parts.append("\n═══ TECHNIQUE ═══")
-            parts.append(f"Prix: {tech.get('prix_actuel')}€ | Rend 5j: {tech.get('rendement_5j_pct')}% | 20j: {tech.get('rendement_20j_pct')}%")
+            parts.append(f"Prix: {tech.get('prix_actuel')}€ | Rend 1j: {tech.get('rendement_1j_pct')}% | 5j: {tech.get('rendement_5j_pct')}% | 20j: {tech.get('rendement_20j_pct')}%")
             parts.append(f"RSI: {tech.get('rsi')} | MACD: {tech.get('macd')} (signal: {tech.get('macd_signal')}, histo: {tech.get('macd_histogram')}, cross: {tech.get('macd_cross')})")
             parts.append(f"BB %B: {tech.get('bb_pct')} [{tech.get('bb_lower')} - {tech.get('bb_upper')}]")
             parts.append(f"SMA20: {tech.get('sma_20')} | SMA50: {tech.get('sma_50')} | SMA200: {tech.get('sma_200')} | >SMA200: {tech.get('au_dessus_sma200')}")

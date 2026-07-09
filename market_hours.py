@@ -132,6 +132,7 @@ def get_us_market_clock(now_et: datetime | None = None) -> dict[str, Any]:
         next_open = _next_us_open(today_close + timedelta(seconds=1))
         sec_to_close = max(0, int((next_close - now_et).total_seconds()))
         sec_to_open = 0
+        sec_since_open = max(0, int((now_et - today_open).total_seconds()))
     else:
         next_close = None
         if is_business_day and now_et < today_open:
@@ -140,6 +141,7 @@ def get_us_market_clock(now_et: datetime | None = None) -> dict[str, Any]:
             next_open = _next_us_open(now_et + timedelta(seconds=1))
         sec_to_open = max(0, int((next_open - now_et).total_seconds()))
         sec_to_close = None
+        sec_since_open = None
 
     return {
         "time_et": now_et.strftime("%Y-%m-%d %H:%M:%S"),
@@ -153,6 +155,7 @@ def get_us_market_clock(now_et: datetime | None = None) -> dict[str, Any]:
         "next_close_paris": next_close.astimezone(PARIS_TZ).strftime("%Y-%m-%d %H:%M:%S") if next_close else "",
         "seconds_to_open": sec_to_open,
         "seconds_to_close": sec_to_close,
+        "seconds_since_open": sec_since_open,
         "note": "Session reguliere NYSE/Nasdaq 09:30-16:00 ET, fériés US standards inclus.",
     }
 

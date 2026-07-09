@@ -401,6 +401,19 @@ Le tableau ci-dessous couvre toutes les variables parametrees dans les fichiers 
 | `BUBO_ALLOW_SHORT` | Autorise les shorts (SELL d'ouverture) | Non | `0` ou `1` | `0` |
 | `BUBO_MAX_OPEN_POSITIONS` | Nombre maximal de positions ouvertes simultanement | Non | Entier `>= 1` | `6` |
 | `BUBO_MAX_TOTAL_EXPOSURE_PCT` | Exposition maximale globale du portefeuille (0 a 1) | Non | Nombre `0.05..1.0` (ex: `0.90`) | `0.90` |
+| `BUBO_ATR_STOP_ENABLED` | Active les stops dynamiques bases sur l'ATR au lieu du seul stop fixe | Non | `0` ou `1` | `1` |
+| `BUBO_ATR_STOP_MULTIPLIER` | Multiplicateur ATR pour calculer le stop dynamique | Non | Nombre `>= 0` | `0.85` |
+| `BUBO_MAX_STOP_LOSS_PCT` | Stop maximal autorise par position (0 a 1) | Non | Nombre `>= 0.001` | `0.08` |
+| `BUBO_TAKE_PROFIT_R_MULTIPLE` | Take-profit minimal exprime en multiple du stop | Non | Nombre `>= 0` | `2.0` |
+| `BUBO_MAX_RISK_PER_TRADE_PCT` | Risque max vise par trade si le stop est touche (0 a 1 du capital) | Non | Nombre `>= 0` | `0.005` |
+| `BUBO_RISKY_ENTRY_CAP_PCT` | Taille max pour une entree gardee mais marquee risquee | Non | Nombre `0..1` | `0.10` |
+| `BUBO_MAX_ENTRY_ATR_PCT` | ATR max avant de classer une entree comme trop volatile | Non | Nombre `0..1` | `0.06` |
+| `BUBO_MAX_ENTRY_RSI` | RSI max avant de classer une entree comme surachetee | Non | Nombre `>= 1` | `72` |
+| `BUBO_MIN_ENTRY_VOLUME_RATIO` | Volume relatif minimal pour autoriser une entree | Non | Nombre `>= 0` | `0.70` |
+| `BUBO_MAX_ENTRY_1D_RET_PCT` | Mouvement 1 jour max sans confirmation volume | Non | Nombre `0..1` | `0.08` |
+| `BUBO_MAX_ENTRY_5D_RET_PCT` | Mouvement 5 jours max sans confirmation volume | Non | Nombre `0..1` | `0.18` |
+| `BUBO_EXTENDED_ENTRY_VOLUME_RATIO` | Volume relatif requis pour accepter une entree deja etendue | Non | Nombre `>= 0` | `1.20` |
+| `BUBO_MARKET_OPEN_ENTRY_DELAY_MIN` | Bloque les nouvelles entrees pendant les premieres minutes de la session US | Non | Entier `>= 0` (minutes) | `45` |
 | `BUBO_PAPER_ENABLED` | Active paper trading | Non | `0` ou `1` | `1` |
 | `BUBO_PAPER_STATE` | Fichier d'etat paper trading | Non | Chemin ecrivable (ex: `data/paper_portfolio_state.json`) | `data/paper_portfolio_state.json` |
 | `BUBO_PAPER_WEBHOOK` | Webhook alertes paper | Non | URL webhook ou vide | vide |

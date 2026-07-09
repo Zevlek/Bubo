@@ -11,6 +11,7 @@ class MarketHoursTests(unittest.TestCase):
         clock = get_us_market_clock(now_et)
         self.assertTrue(clock["is_open"])
         self.assertFalse(clock["is_holiday"])
+        self.assertEqual(clock["seconds_since_open"], 30 * 60)
 
     def test_independence_day_observed_closed(self):
         # 2026-07-04 is Saturday, market holiday observed on Friday 2026-07-03

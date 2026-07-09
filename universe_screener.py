@@ -86,6 +86,30 @@ class ScreenerConfig:
     w_range: float = 1.5
     w_vol_z: float = 4.0
     w_vol_pctile: float = 0.25
+    extended_move_1d_pct: float = 6.0
+    hard_extended_move_1d_pct: float = 12.0
+    extended_move_5d_pct: float = 18.0
+    min_extended_rvol: float = 1.20
+    min_extended_volume_pctile: float = 45.0
+    max_extended_rsi: float = 72.0
+    max_range_pct: float = 9.0
+    w_extension_penalty: float = 5.0
+    w_weak_volume_penalty: float = 18.0
+
+
+def _last_rsi(close: pd.Series, period: int = 14) -> float:
+    values = pd.to_numeric(close, errors="coerce").dropna()
+    if len(values) <= period:
+        return 50.0
+    delta = values.diff()
+    gains = delta.clip(lower=0).tail(period)
+    losses = (-delta.clip(upper=0)).tail(period)
+    avg_gain = float(gains.mean())
+    avg_loss = float(losses.mean())
+    if avg_loss <= 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return float(100.0 - (100.0 / (1.0 + rs)))
 
 
 class UniverseScreener:
@@ -164,8 +188,35 @@ class UniverseScreener:
 
             range_14 = (high.tail(14) - low.tail(14)).mean() if len(df) >= 14 else (high - low).mean()
             range_pct = float(range_14 / c0 * 100) if c0 > 0 and pd.notna(range_14) else 0.0
+            rsi_14 = _last_rsi(close)
 
-            score = (
+            extended_1d = abs_ret_1d_pct >= float(self.cfg.extended_move_1d_pct)
+            hard_extended_1d = abs_ret_1d_pct >= float(self.cfg.hard_extended_move_1d_pct)
+            extended_5d = abs_ret_5d_pct >= float(self.cfg.extended_move_5d_pct)
+            volume_confirmed = (
+                rvol >= float(self.cfg.min_extended_rvol)
+                or vol_pctile_60 >= float(self.cfg.min_extended_volume_pctile)
+            )
+            rsi_stretched = rsi_14 >= float(self.cfg.max_extended_rsi)
+
+            flags: list[str] = []
+            if extended_1d:
+                flags.append("extended_1d")
+            if extended_5d:
+                flags.append("extended_5d")
+            if not volume_confirmed:
+                flags.append("weak_volume")
+            if rsi_stretched:
+                flags.append("rsi_stretched")
+            if range_pct >= float(self.cfg.max_range_pct):
+                flags.append("wide_range")
+
+            if hard_extended_1d and not volume_confirmed:
+                continue
+            if (extended_1d or extended_5d) and rsi_stretched and not volume_confirmed:
+                continue
+
+            raw_score = (
                 abs_ret_1d_pct * self.cfg.w_abs_ret_1d
                 + abs_ret_5d_pct * self.cfg.w_abs_ret_5d
                 + max(0.0, rvol - 1.0) * self.cfg.w_rvol
@@ -173,6 +224,15 @@ class UniverseScreener:
                 + max(0.0, vol_z20) * self.cfg.w_vol_z
                 + max(0.0, vol_pctile_60 - 80.0) * self.cfg.w_vol_pctile
             )
+            penalty = 0.0
+            penalty += max(0.0, abs_ret_1d_pct - float(self.cfg.extended_move_1d_pct)) * self.cfg.w_extension_penalty
+            penalty += max(0.0, abs_ret_5d_pct - float(self.cfg.extended_move_5d_pct)) * (self.cfg.w_extension_penalty * 0.5)
+            penalty += max(0.0, range_pct - float(self.cfg.max_range_pct)) * (self.cfg.w_extension_penalty * 0.7)
+            if (extended_1d or extended_5d) and not volume_confirmed:
+                penalty += float(self.cfg.w_weak_volume_penalty)
+            if (extended_1d or extended_5d) and rsi_stretched:
+                penalty += max(0.0, rsi_14 - float(self.cfg.max_extended_rsi)) * 0.8
+            score = max(0.0, raw_score - penalty)
 
             rows.append(
                 {
@@ -184,6 +244,8 @@ class UniverseScreener:
                     "volume_z20": round(float(vol_z20), 3),
                     "volume_pctile_60": round(float(vol_pctile_60), 2),
                     "range_pct": round(range_pct, 3),
+                    "rsi_14": round(float(rsi_14), 2),
+                    "screen_flags": ",".join(flags),
                     "close": round(c0, 4),
                 }
             )
@@ -199,6 +261,8 @@ class UniverseScreener:
                     "volume_z20",
                     "volume_pctile_60",
                     "range_pct",
+                    "rsi_14",
+                    "screen_flags",
                     "close",
                 ]
             )

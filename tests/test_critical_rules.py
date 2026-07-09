@@ -110,6 +110,54 @@ class CriticalRulesTests(unittest.TestCase):
             bubo_engine.MODULES.clear()
             bubo_engine.MODULES.update(saved_modules)
 
+    def test_risk_gate_blocks_high_volatility_overbought_buy(self):
+        cfg = EngineConfig()
+        results = {
+            "AAA": {
+                "ticker": "AAA",
+                "decision": "BUY",
+                "position_size_pct": 0.25,
+                "final_score": 85.0,
+                "confidence": 80.0,
+                "atr_pct": 6.5,
+                "rsi": 76.0,
+                "volume_ratio": 1.4,
+                "warnings": [],
+            }
+        }
+
+        summary = apply_portfolio_risk_gates(cfg, results)
+
+        self.assertEqual(summary["blocked"], 1)
+        self.assertEqual(results["AAA"]["decision"], "HOLD")
+        self.assertEqual(results["AAA"]["position_size_pct"], 0.0)
+        self.assertTrue(any("high volatility" in w for w in results["AAA"]["warnings"]))
+
+    def test_risk_gate_clips_position_to_fixed_risk_budget(self):
+        cfg = EngineConfig()
+        cfg.max_risk_per_trade_pct = 0.005
+        cfg.atr_stop_multiplier = 0.85
+        results = {
+            "AAA": {
+                "ticker": "AAA",
+                "decision": "BUY",
+                "position_size_pct": 0.25,
+                "final_score": 88.0,
+                "confidence": 88.0,
+                "atr_pct": 4.0,
+                "rsi": 61.0,
+                "volume_ratio": 1.6,
+                "warnings": [],
+            }
+        }
+
+        summary = apply_portfolio_risk_gates(cfg, results)
+
+        self.assertEqual(summary["kept"], 1)
+        self.assertEqual(summary["clipped"], 1)
+        self.assertAlmostEqual(results["AAA"]["risk_stop_loss_pct"], 0.034, places=3)
+        self.assertAlmostEqual(results["AAA"]["position_size_pct"], 0.147, places=3)
+
     def test_set_tickers_deduplicates_and_normalizes(self):
         saved_modules = bubo_engine.MODULES.copy()
         try:

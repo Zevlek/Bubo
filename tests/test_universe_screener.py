@@ -84,6 +84,21 @@ class UniverseScreenerTests(unittest.TestCase):
         self.assertEqual(list(ranked["ticker"]), ["FRESH"])
         self.assertIn("STALE", screener.last_failures)
 
+    def test_screen_rejects_hard_extended_move_without_volume_confirmation(self):
+        df_confirmed = make_df(last_close=106.0, prev_close=100.0, prev5_close=100.0,
+                               last_vol=2_000, base_vol=1_000)
+        df_chase = make_df(last_close=113.0, prev_close=100.0, prev5_close=100.0,
+                           last_vol=700, base_vol=1_000)
+
+        screener = UniverseScreener(
+            ScreenerConfig(top_n=2),
+            fetcher=DummyFetcher({"CONF": df_confirmed, "CHASE": df_chase}),
+        )
+        ranked = screener.screen(["CONF", "CHASE"], top_n=2)
+
+        self.assertEqual(list(ranked["ticker"]), ["CONF"])
+        self.assertIn("screen_flags", ranked.columns)
+
     def test_budget_manager_caps_selected_tickers(self):
         ranked = pd.DataFrame(
             {

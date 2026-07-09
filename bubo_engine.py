@@ -22,6 +22,7 @@ import argparse
 import warnings
 import json
 import urllib.request
+import unicodedata
 from collections import Counter
 from datetime import datetime, timedelta, date
 from dataclasses import dataclass, field
@@ -146,6 +147,21 @@ class EngineConfig:
     stop_loss_pct: float = 0.02
     stop_loss_cooldown_days: int = 1
     take_profit_pct: float = 0.10
+    atr_stop_enabled: bool = True
+    atr_stop_multiplier: float = 0.85
+    max_stop_loss_pct: float = 0.08
+    take_profit_r_multiple: float = 2.0
+    max_risk_per_trade_pct: float = 0.005
+    risky_entry_cap_pct: float = 0.10
+    max_entry_atr_pct: float = 0.06
+    max_entry_rsi: float = 72.0
+    min_entry_volume_ratio: float = 0.70
+    max_entry_1d_ret_pct: float = 0.08
+    max_entry_5d_ret_pct: float = 0.18
+    extended_entry_volume_ratio: float = 1.20
+    macd_bearish_min_score: float = 90.0
+    macd_bearish_min_confidence: float = 85.0
+    market_open_entry_delay_min: int = 45
     trade_fee_bps: float = 5.0      # 5 bps commission per side
     slippage_bps: float = 5.0       # 5 bps slippage per side
     initial_capital: float = 10000.0
@@ -303,6 +319,10 @@ class ScoringEngine:
             "max_position_pct": float(self.cfg.max_position_pct),
             "max_open_positions": int(self.cfg.max_open_positions),
             "max_total_exposure_pct": float(self.cfg.max_total_exposure_pct),
+            "max_risk_per_trade_pct": float(self.cfg.max_risk_per_trade_pct),
+            "min_stop_loss_pct": float(self.cfg.stop_loss_pct),
+            "max_stop_loss_pct": float(self.cfg.max_stop_loss_pct),
+            "take_profit_r_multiple": float(self.cfg.take_profit_r_multiple),
             "allow_short": bool(self.cfg.allow_short),
             "paper_broker": str(self.cfg.paper_broker),
         }
@@ -453,6 +473,10 @@ class ScoringEngine:
             if blackout_reason:
                 warnings_list.append(f"Event blackout: {blackout_reason}")
 
+        technical = data.get("technical", {}) if isinstance(data, dict) else {}
+        if not isinstance(technical, dict) or "error" in technical:
+            technical = {}
+
         return {
             "score": round(score, 1),
             "decision": decision,
@@ -460,6 +484,18 @@ class ScoringEngine:
             "position_size_pct": round(position, 3),
             "reasons": reasons,
             "warnings": warnings_list,
+            "technical": technical,
+            "atr_pct": technical.get("atr_pct"),
+            "rsi": technical.get("rsi"),
+            "volume_ratio": technical.get("volume_ratio"),
+            "volume_percentile_60": technical.get("volume_percentile_60"),
+            "volume_zscore_20": technical.get("volume_zscore_20"),
+            "ret_1d_pct": technical.get("rendement_1j_pct"),
+            "ret_5d_pct": technical.get("rendement_5j_pct"),
+            "macd": technical.get("macd"),
+            "macd_signal": technical.get("macd_signal"),
+            "macd_histogram": technical.get("macd_histogram"),
+            "macd_cross": technical.get("macd_cross"),
             "llm_status": llm_status,
             "llm_model": llm_model,
             "llm_error": llm_error,
@@ -493,6 +529,21 @@ class ScoringEngine:
                 result["position_size_pct"] = llm["position_size_pct"]
                 result["reasons"].extend(llm.get("reasons", []))
                 result["warnings"].extend(llm.get("warnings", []))
+                result["technical"] = llm.get("technical", {}) if isinstance(llm.get("technical"), dict) else {}
+                for metric_key in (
+                    "atr_pct",
+                    "rsi",
+                    "volume_ratio",
+                    "volume_percentile_60",
+                    "volume_zscore_20",
+                    "ret_1d_pct",
+                    "ret_5d_pct",
+                    "macd",
+                    "macd_signal",
+                    "macd_histogram",
+                    "macd_cross",
+                ):
+                    result[metric_key] = llm.get(metric_key)
                 result["llm_status"] = str(llm.get("llm_status", "ok"))
                 result["llm_model"] = str(llm.get("llm_model", ""))
                 result["llm_error"] = str(llm.get("llm_error", ""))
@@ -1114,6 +1165,190 @@ class CombinedBacktester:
 # Dashboard
 # ─────────────────────────────────────────────
 
+def _safe_float_value(value: Any, default: float | None = None) -> float | None:
+    try:
+        out = float(value)
+    except Exception:
+        return default
+    if not np.isfinite(out):
+        return default
+    return out
+
+
+def _metric_value(row: dict[str, Any] | None, *keys: str, default: float | None = None) -> float | None:
+    if not isinstance(row, dict):
+        return default
+    for key in keys:
+        if key in row:
+            val = _safe_float_value(row.get(key), None)
+            if val is not None:
+                return val
+    tech = row.get("technical")
+    if isinstance(tech, dict):
+        for key in keys:
+            if key in tech:
+                val = _safe_float_value(tech.get(key), None)
+                if val is not None:
+                    return val
+    entry_signal = row.get("entry_signal")
+    if isinstance(entry_signal, dict):
+        for key in keys:
+            if key in entry_signal:
+                val = _safe_float_value(entry_signal.get(key), None)
+                if val is not None:
+                    return val
+        tech = entry_signal.get("technical")
+        if isinstance(tech, dict):
+            for key in keys:
+                if key in tech:
+                    val = _safe_float_value(tech.get(key), None)
+                    if val is not None:
+                        return val
+    return default
+
+
+def _pct_metric_as_fraction(value: Any, default: float = 0.0) -> float:
+    val = _safe_float_value(value, None)
+    if val is None:
+        return float(default)
+    val = abs(float(val))
+    if val > 1.0:
+        val = val / 100.0
+    return max(0.0, float(val))
+
+
+def _row_pct_fraction(row: dict[str, Any] | None, *keys: str, default: float = 0.0) -> float:
+    return _pct_metric_as_fraction(_metric_value(row, *keys, default=None), default=default)
+
+
+def _warning_text(row: dict[str, Any] | None) -> str:
+    if not isinstance(row, dict):
+        return ""
+    pieces: list[str] = []
+    for key in ("warnings", "reasons"):
+        values = row.get(key)
+        if isinstance(values, (list, tuple)):
+            pieces.extend(str(v or "") for v in values)
+    text = " ".join(pieces).strip().lower()
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
+def _is_macd_bearish(row: dict[str, Any] | None, text: str = "") -> bool:
+    if "macd baiss" in text or "macd negatif" in text or "macd sous signal" in text:
+        return True
+    row = row or {}
+    tech = row.get("technical") if isinstance(row, dict) else {}
+    cross = str(row.get("macd_cross", "") or "").strip().lower()
+    if not cross and isinstance(tech, dict):
+        cross = str(tech.get("macd_cross", "") or "").strip().lower()
+    if cross == "bearish":
+        return True
+    hist = _metric_value(row, "macd_histogram", "macd_hist")
+    if hist is not None and hist < 0:
+        return True
+    macd = _metric_value(row, "macd")
+    signal = _metric_value(row, "macd_signal")
+    return macd is not None and signal is not None and macd < signal
+
+
+def _entry_risk_review(cfg: EngineConfig, row: dict[str, Any], side: str) -> tuple[list[str], list[str]]:
+    """
+    Returns (block_reasons, risk_flags) for new entries.
+    Long entries get stricter filters because recent logs show stop churn on
+    overextended long momentum names.
+    """
+    if side != "long":
+        return [], []
+
+    text = _warning_text(row)
+    score = _safe_float_value(row.get("final_score"), 50.0) or 50.0
+    confidence = _safe_float_value(row.get("confidence"), 0.0) or 0.0
+    atr = _row_pct_fraction(row, "atr_pct")
+    ret_1d = _row_pct_fraction(row, "ret_1d_pct", "rendement_1j_pct")
+    ret_5d = _row_pct_fraction(row, "ret_5d_pct", "rendement_5j_pct")
+    rsi = _metric_value(row, "rsi")
+    volume_ratio = _metric_value(row, "volume_ratio")
+
+    high_vol = atr >= float(getattr(cfg, "max_entry_atr_pct", 0.06) or 0.06)
+    high_vol = high_vol or ("volatil" in text) or ("atr" in text)
+    overbought = (rsi is not None and rsi >= float(getattr(cfg, "max_entry_rsi", 72.0) or 72.0))
+    overbought = overbought or ("surachat" in text) or ("surchauffe" in text) or ("rsi eleve" in text)
+    weak_volume = volume_ratio is not None and volume_ratio > 0 and volume_ratio < float(
+        getattr(cfg, "min_entry_volume_ratio", 0.70) or 0.70
+    )
+    weak_volume = weak_volume or ("volume faible" in text) or ("faible volume" in text)
+    macd_bearish = _is_macd_bearish(row, text)
+    correction_risk = "correction" in text
+    extended_1d = ret_1d >= float(getattr(cfg, "max_entry_1d_ret_pct", 0.08) or 0.08)
+    extended_5d = ret_5d >= float(getattr(cfg, "max_entry_5d_ret_pct", 0.18) or 0.18)
+    volume_confirmed = volume_ratio is not None and volume_ratio >= float(
+        getattr(cfg, "extended_entry_volume_ratio", 1.20) or 1.20
+    )
+
+    flags: list[str] = []
+    if high_vol:
+        flags.append("high volatility")
+    if overbought:
+        flags.append("overbought RSI")
+    if weak_volume:
+        flags.append("weak volume")
+    if macd_bearish:
+        flags.append("bearish MACD")
+    if extended_1d:
+        flags.append("extended 1d move")
+    if extended_5d:
+        flags.append("extended 5d move")
+
+    blocks: list[str] = []
+    if weak_volume:
+        blocks.append("weak volume confirmation")
+    if high_vol and overbought:
+        blocks.append("high volatility + overbought RSI")
+    if high_vol and weak_volume:
+        blocks.append("high volatility + weak volume")
+    if extended_1d and not volume_confirmed:
+        blocks.append(f"1d move {ret_1d:.1%} without volume confirmation")
+    if extended_5d and not volume_confirmed:
+        blocks.append(f"5d move {ret_5d:.1%} without volume confirmation")
+    if correction_risk and (high_vol or overbought):
+        blocks.append("correction risk on stretched setup")
+    if macd_bearish and (
+        score < float(getattr(cfg, "macd_bearish_min_score", 90.0) or 90.0)
+        or confidence < float(getattr(cfg, "macd_bearish_min_confidence", 85.0) or 85.0)
+    ):
+        blocks.append("bearish MACD below override threshold")
+
+    return blocks, flags
+
+
+def _effective_stop_loss_pct(cfg: EngineConfig, row: dict[str, Any] | None) -> float:
+    stored = _row_pct_fraction(row, "stop_loss_pct", "risk_stop_loss_pct")
+    if stored > 0:
+        return stored
+
+    floor = max(0.001, float(getattr(cfg, "stop_loss_pct", 0.02) or 0.02))
+    stop = floor
+    if bool(getattr(cfg, "atr_stop_enabled", True)):
+        atr = _row_pct_fraction(row, "atr_pct")
+        mult = max(0.0, float(getattr(cfg, "atr_stop_multiplier", 0.85) or 0.85))
+        if atr > 0 and mult > 0:
+            stop = max(stop, atr * mult)
+    max_stop = max(floor, float(getattr(cfg, "max_stop_loss_pct", 0.08) or 0.08))
+    return max(0.001, min(stop, max_stop))
+
+
+def _effective_take_profit_pct(cfg: EngineConfig, row: dict[str, Any] | None, stop_pct: float | None = None) -> float:
+    stored = _row_pct_fraction(row, "take_profit_pct", "risk_take_profit_pct")
+    if stored > 0:
+        return stored
+    base = max(0.001, float(getattr(cfg, "take_profit_pct", 0.10) or 0.10))
+    stop = float(stop_pct if stop_pct is not None else _effective_stop_loss_pct(cfg, row))
+    r_multiple = max(0.0, float(getattr(cfg, "take_profit_r_multiple", 2.0) or 2.0))
+    if r_multiple > 0:
+        base = max(base, stop * r_multiple)
+    return max(0.001, base)
+
+
 def apply_portfolio_risk_gates(cfg: EngineConfig, results: dict) -> dict:
     """
     Apply live portfolio limits to per-ticker decisions.
@@ -1150,6 +1385,43 @@ def apply_portfolio_risk_gates(cfg: EngineConfig, results: dict) -> dict:
             force_hold(r, "non-positive position size")
             summary["blocked"] += 1
             continue
+        side = "long" if is_long else "short"
+        block_reasons, risk_flags = _entry_risk_review(cfg, r, side)
+        if risk_flags:
+            r["entry_risk_flags"] = list(risk_flags)
+        if block_reasons:
+            force_hold(r, "; ".join(block_reasons[:3]))
+            summary["blocked"] += 1
+            continue
+
+        stop_pct = _effective_stop_loss_pct(cfg, r)
+        take_profit_pct = _effective_take_profit_pct(cfg, r, stop_pct)
+        r["risk_stop_loss_pct"] = round(stop_pct, 4)
+        r["risk_take_profit_pct"] = round(take_profit_pct, 4)
+
+        size_cap = float(cfg.max_position_pct)
+        risk_budget = max(0.0, float(getattr(cfg, "max_risk_per_trade_pct", 0.0) or 0.0))
+        if risk_budget > 0 and stop_pct > 0:
+            size_cap = min(size_cap, risk_budget / stop_pct)
+        risky_cap = max(0.0, float(getattr(cfg, "risky_entry_cap_pct", 0.0) or 0.0))
+        if risk_flags and risky_cap > 0:
+            size_cap = min(size_cap, risky_cap)
+
+        if pos > size_cap:
+            if size_cap >= cfg.min_position_pct:
+                r["position_size_pct"] = round(size_cap, 3)
+                warning = (
+                    f"Risk gate: clipped to {r['position_size_pct']:.1%} "
+                    f"(risk budget {risk_budget:.2%}, stop {stop_pct:.1%})"
+                )
+                warnings_for_row = r.setdefault("warnings", [])
+                if warning not in warnings_for_row:
+                    warnings_for_row.append(warning)
+                summary["clipped"] += 1
+            else:
+                force_hold(r, f"risk budget too small for stop {stop_pct:.1%}")
+                summary["blocked"] += 1
+                continue
         candidates.append(r)
 
     # Highest-quality candidates are allocated first.
@@ -2087,6 +2359,14 @@ def log_cycle_outputs(results: dict,
             "score": row.get("final_score"),
             "confidence": row.get("confidence"),
             "position_size_pct": row.get("position_size_pct"),
+            "risk_stop_loss_pct": row.get("risk_stop_loss_pct"),
+            "risk_take_profit_pct": row.get("risk_take_profit_pct"),
+            "entry_risk_flags": row.get("entry_risk_flags", []),
+            "atr_pct": row.get("atr_pct"),
+            "rsi": row.get("rsi"),
+            "volume_ratio": row.get("volume_ratio"),
+            "ret_1d_pct": row.get("ret_1d_pct"),
+            "ret_5d_pct": row.get("ret_5d_pct"),
             "llm_status": row.get("llm_status"),
             "llm_model": row.get("llm_model"),
             "llm_error": row.get("llm_error"),
@@ -2714,6 +2994,14 @@ def run_paper_cycle(engine: ScoringEngine,
             "score": float(row.get("final_score", 50.0) or 50.0),
             "confidence": float(row.get("confidence", 0.0) or 0.0),
             "position_size_pct": float(row.get("position_size_pct", 0.0) or 0.0),
+            "risk_stop_loss_pct": float(row.get("risk_stop_loss_pct", 0.0) or 0.0),
+            "risk_take_profit_pct": float(row.get("risk_take_profit_pct", 0.0) or 0.0),
+            "atr_pct": row.get("atr_pct"),
+            "rsi": row.get("rsi"),
+            "volume_ratio": row.get("volume_ratio"),
+            "ret_1d_pct": row.get("ret_1d_pct"),
+            "ret_5d_pct": row.get("ret_5d_pct"),
+            "entry_risk_flags": list(row.get("entry_risk_flags", []) or []),
             "llm_status": str(row.get("llm_status", "") or "").strip(),
             "llm_model": str(row.get("llm_model", "") or "").strip(),
             "llm_error": str(row.get("llm_error", "") or "").strip(),
@@ -2802,6 +3090,8 @@ def run_paper_cycle(engine: ScoringEngine,
                         "price_source": price_source,
                         "market_value": float(mv),
                         "unrealized_pnl": float(upnl),
+                        "stop_loss_pct": float(prev.get("stop_loss_pct", 0.0) or 0.0),
+                        "take_profit_pct": float(prev.get("take_profit_pct", 0.0) or 0.0),
                         "entry_signal": prev.get("entry_signal", {}),
                     }
                 had_positions = bool(positions)
@@ -3028,6 +3318,11 @@ def run_paper_cycle(engine: ScoringEngine,
                 "shares": int(-filled_shares if is_short else filled_shares),
                 "entry_fee": round(pos_row.get("entry_fee", 0.0), 4),
                 "exit_fee": round(exit_fee, 4),
+                "stop_loss_pct": round(_effective_stop_loss_pct(cfg, pos_row), 4),
+                "take_profit_pct": round(
+                    _effective_take_profit_pct(cfg, pos_row, _effective_stop_loss_pct(cfg, pos_row)),
+                    4,
+                ),
                 "pnl": round(pnl, 4),
                 "exit_reason": exit_reason,
                 "hold_days": int(hold_days),
@@ -3047,6 +3342,11 @@ def run_paper_cycle(engine: ScoringEngine,
                 "filled_shares": int(filled_shares),
                 "price": round(float(exec_px), 6),
                 "commission": round(float(exit_fee), 6),
+                "stop_loss_pct": round(_effective_stop_loss_pct(cfg, pos_row), 4),
+                "take_profit_pct": round(
+                    _effective_take_profit_pct(cfg, pos_row, _effective_stop_loss_pct(cfg, pos_row)),
+                    4,
+                ),
                 "status": "filled",
                 "reason": exit_reason,
             }
@@ -3071,19 +3371,23 @@ def run_paper_cycle(engine: ScoringEngine,
         decision = str((results.get(ticker, {}) or {}).get("decision", "HOLD") or "HOLD").strip().upper()
         exit_reason = None
         entry_price = float(pos.get("entry_price", 0.0) or 0.0)
+        stop_pct = _effective_stop_loss_pct(cfg, pos)
+        take_profit_pct = _effective_take_profit_pct(cfg, pos, stop_pct)
+        pos["stop_loss_pct"] = round(stop_pct, 4)
+        pos["take_profit_pct"] = round(take_profit_pct, 4)
         if is_short:
             if decision in ("BUY", "STRONG BUY"):
                 exit_reason = "signal_buy_to_cover"
-            elif entry_price > 0 and px >= entry_price * (1 + cfg.stop_loss_pct):
+            elif entry_price > 0 and px >= entry_price * (1 + stop_pct):
                 exit_reason = "stop_loss"
-            elif entry_price > 0 and px <= entry_price * (1 - cfg.take_profit_pct):
+            elif entry_price > 0 and px <= entry_price * (1 - take_profit_pct):
                 exit_reason = "take_profit"
         else:
             if decision in ("SELL", "STRONG SELL"):
                 exit_reason = "signal_sell"
-            elif entry_price > 0 and px <= entry_price * (1 - cfg.stop_loss_pct):
+            elif entry_price > 0 and px <= entry_price * (1 - stop_pct):
                 exit_reason = "stop_loss"
-            elif entry_price > 0 and px >= entry_price * (1 + cfg.take_profit_pct):
+            elif entry_price > 0 and px >= entry_price * (1 + take_profit_pct):
                 exit_reason = "take_profit"
 
         if exit_reason:
@@ -3109,8 +3413,21 @@ def run_paper_cycle(engine: ScoringEngine,
             if not bool(market_clock.get("is_open")):
                 ibkr_entry_block_reason = "market closed"
             else:
+                open_delay_s = max(
+                    0,
+                    int(float(getattr(cfg, "market_open_entry_delay_min", 0) or 0) * 60),
+                )
+                seconds_since_open = market_clock.get("seconds_since_open")
+                if (
+                    open_delay_s > 0
+                    and isinstance(seconds_since_open, int)
+                    and seconds_since_open < open_delay_s
+                ):
+                    ibkr_entry_block_reason = (
+                        f"open delay active ({seconds_since_open}s since open < {open_delay_s}s)"
+                    )
                 seconds_to_close = market_clock.get("seconds_to_close")
-                if isinstance(seconds_to_close, int) and seconds_to_close <= cutoff_s:
+                if not ibkr_entry_block_reason and isinstance(seconds_to_close, int) and seconds_to_close <= cutoff_s:
                     ibkr_entry_block_reason = (
                         f"entry cutoff active ({max(0, seconds_to_close)}s to close <= {cutoff_s}s)"
                     )
@@ -3153,6 +3470,34 @@ def run_paper_cycle(engine: ScoringEngine,
         if target_pct <= 0:
             _count_no_trade("non-positive position size")
             continue
+        block_reasons, risk_flags = _entry_risk_review(cfg, r, side)
+        if risk_flags:
+            r["entry_risk_flags"] = list(risk_flags)
+        if block_reasons:
+            _count_no_trade("entry risk gate")
+            warnings_list.append(f"Entry risk gate {ticker}: {'; '.join(block_reasons[:3])}")
+            continue
+        stop_pct = _effective_stop_loss_pct(cfg, r)
+        take_profit_pct = _effective_take_profit_pct(cfg, r, stop_pct)
+        r["risk_stop_loss_pct"] = round(stop_pct, 4)
+        r["risk_take_profit_pct"] = round(take_profit_pct, 4)
+        risk_budget = max(0.0, float(getattr(cfg, "max_risk_per_trade_pct", 0.0) or 0.0))
+        size_cap = float(cfg.max_position_pct)
+        if risk_budget > 0 and stop_pct > 0:
+            size_cap = min(size_cap, risk_budget / stop_pct)
+        risky_cap = max(0.0, float(getattr(cfg, "risky_entry_cap_pct", 0.0) or 0.0))
+        if risk_flags and risky_cap > 0:
+            size_cap = min(size_cap, risky_cap)
+        if target_pct > size_cap:
+            if size_cap < cfg.min_position_pct:
+                _count_no_trade("risk budget below minimum size")
+                continue
+            warnings_list.append(
+                f"Entry sizing {ticker}: clipped {target_pct:.1%}->{size_cap:.1%} "
+                f"(stop={stop_pct:.1%}, risk={risk_budget:.2%})"
+            )
+            target_pct = round(size_cap, 3)
+            r["position_size_pct"] = target_pct
         if len(positions) >= int(cfg.max_open_positions):
             if (
                 (not cfg.rotation_enabled)
@@ -3298,6 +3643,8 @@ def run_paper_cycle(engine: ScoringEngine,
         if not resolved_name:
             resolved_name = ticker
         signed_shares = -int(shares) if is_short_entry else int(shares)
+        stop_pct = _effective_stop_loss_pct(cfg, r)
+        take_profit_pct = _effective_take_profit_pct(cfg, r, stop_pct)
         positions[ticker] = {
             "ticker": ticker,
             "name": resolved_name,
@@ -3310,6 +3657,8 @@ def run_paper_cycle(engine: ScoringEngine,
             "last_price": float(px),
             "market_value": float(signed_shares * px),
             "unrealized_pnl": float((signed_shares * (px - exec_px)) - entry_fee),
+            "stop_loss_pct": round(float(stop_pct), 4),
+            "take_profit_pct": round(float(take_profit_pct), 4),
             "entry_signal": _decision_snapshot(r),
         }
         action_label = "SHORT SELL" if is_short_entry else "BUY"
@@ -3323,6 +3672,8 @@ def run_paper_cycle(engine: ScoringEngine,
                 "filled_shares": int(shares),
                 "price": round(float(exec_px), 6),
                 "commission": round(float(entry_fee), 6),
+                "stop_loss_pct": round(float(stop_pct), 4),
+                "take_profit_pct": round(float(take_profit_pct), 4),
                 "status": "filled",
                 "reason": "signal_short" if is_short_entry else "signal_buy",
             }
@@ -3659,6 +4010,96 @@ def main():
         default=int(os.getenv("BUBO_STOP_LOSS_COOLDOWN_DAYS", "1")),
         help="Nombre de jours calendaires pendant lesquels une nouvelle entree est bloquee apres stop-loss.",
     )
+    parser.add_argument(
+        "--atr-stop-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=str(os.getenv("BUBO_ATR_STOP_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Adapte le stop-loss a l'ATR du titre au lieu d'utiliser seulement le stop fixe.",
+    )
+    parser.add_argument(
+        "--atr-stop-multiplier",
+        type=float,
+        default=float(os.getenv("BUBO_ATR_STOP_MULTIPLIER", "0.85")),
+        help="Multiplicateur ATR utilise pour calculer le stop dynamique.",
+    )
+    parser.add_argument(
+        "--max-stop-loss-pct",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_STOP_LOSS_PCT", "0.08")),
+        help="Stop-loss maximal autorise par position (fraction 0-1).",
+    )
+    parser.add_argument(
+        "--take-profit-r-multiple",
+        type=float,
+        default=float(os.getenv("BUBO_TAKE_PROFIT_R_MULTIPLE", "2.0")),
+        help="Objectif minimal exprime en multiple du risque de stop.",
+    )
+    parser.add_argument(
+        "--max-risk-per-trade-pct",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_RISK_PER_TRADE_PCT", "0.005")),
+        help="Perte maximale visee par trade si le stop est touche (fraction du capital).",
+    )
+    parser.add_argument(
+        "--risky-entry-cap-pct",
+        type=float,
+        default=float(os.getenv("BUBO_RISKY_ENTRY_CAP_PCT", "0.10")),
+        help="Taille maximale des entrees qui gardent des flags de risque mais ne sont pas bloquees.",
+    )
+    parser.add_argument(
+        "--max-entry-atr-pct",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_ENTRY_ATR_PCT", "0.06")),
+        help="ATR% max avant de considerer une entree comme volatile (fraction 0-1).",
+    )
+    parser.add_argument(
+        "--max-entry-rsi",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_ENTRY_RSI", "72")),
+        help="RSI max avant de considerer une entree comme surachetee.",
+    )
+    parser.add_argument(
+        "--min-entry-volume-ratio",
+        type=float,
+        default=float(os.getenv("BUBO_MIN_ENTRY_VOLUME_RATIO", "0.70")),
+        help="Volume relatif minimal pour autoriser une entree.",
+    )
+    parser.add_argument(
+        "--max-entry-1d-ret-pct",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_ENTRY_1D_RET_PCT", "0.08")),
+        help="Mouvement 1 jour max sans confirmation volume (fraction 0-1).",
+    )
+    parser.add_argument(
+        "--max-entry-5d-ret-pct",
+        type=float,
+        default=float(os.getenv("BUBO_MAX_ENTRY_5D_RET_PCT", "0.18")),
+        help="Mouvement 5 jours max sans confirmation volume (fraction 0-1).",
+    )
+    parser.add_argument(
+        "--extended-entry-volume-ratio",
+        type=float,
+        default=float(os.getenv("BUBO_EXTENDED_ENTRY_VOLUME_RATIO", "1.20")),
+        help="Volume relatif requis pour accepter une entree deja tres etendue.",
+    )
+    parser.add_argument(
+        "--macd-bearish-min-score",
+        type=float,
+        default=float(os.getenv("BUBO_MACD_BEARISH_MIN_SCORE", "90")),
+        help="Score LLM minimal pour passer outre un MACD baissier.",
+    )
+    parser.add_argument(
+        "--macd-bearish-min-confidence",
+        type=float,
+        default=float(os.getenv("BUBO_MACD_BEARISH_MIN_CONFIDENCE", "85")),
+        help="Confiance LLM minimale pour passer outre un MACD baissier.",
+    )
+    parser.add_argument(
+        "--market-open-entry-delay-min",
+        type=int,
+        default=int(os.getenv("BUBO_MARKET_OPEN_ENTRY_DELAY_MIN", "45")),
+        help="Bloque les nouvelles entrees pendant les N premieres minutes de la session US.",
+    )
     parser.add_argument("--no-finbert", action="store_true")
     parser.add_argument(
         "--allow-short",
@@ -3784,6 +4225,21 @@ def main():
     cfg = EngineConfig()
     cfg.initial_capital = args.capital
     cfg.stop_loss_cooldown_days = max(0, int(args.stop_loss_cooldown_days))
+    cfg.atr_stop_enabled = bool(args.atr_stop_enabled)
+    cfg.atr_stop_multiplier = max(0.0, float(args.atr_stop_multiplier))
+    cfg.max_stop_loss_pct = max(cfg.stop_loss_pct, float(args.max_stop_loss_pct))
+    cfg.take_profit_r_multiple = max(0.0, float(args.take_profit_r_multiple))
+    cfg.max_risk_per_trade_pct = max(0.0, float(args.max_risk_per_trade_pct))
+    cfg.risky_entry_cap_pct = max(0.0, min(1.0, float(args.risky_entry_cap_pct)))
+    cfg.max_entry_atr_pct = max(0.0, float(args.max_entry_atr_pct))
+    cfg.max_entry_rsi = max(1.0, float(args.max_entry_rsi))
+    cfg.min_entry_volume_ratio = max(0.0, float(args.min_entry_volume_ratio))
+    cfg.max_entry_1d_ret_pct = max(0.0, float(args.max_entry_1d_ret_pct))
+    cfg.max_entry_5d_ret_pct = max(0.0, float(args.max_entry_5d_ret_pct))
+    cfg.extended_entry_volume_ratio = max(0.0, float(args.extended_entry_volume_ratio))
+    cfg.macd_bearish_min_score = max(0.0, min(100.0, float(args.macd_bearish_min_score)))
+    cfg.macd_bearish_min_confidence = max(0.0, min(100.0, float(args.macd_bearish_min_confidence)))
+    cfg.market_open_entry_delay_min = max(0, int(args.market_open_entry_delay_min))
     cfg.watch_interval_min = max(1, int(args.watch_interval_min))
     cfg.us_market_only = bool(args.us_market_only)
     cfg.analyze_when_us_closed = bool(args.analyze_when_us_closed)

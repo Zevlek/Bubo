@@ -2130,6 +2130,21 @@ def get_default_config() -> dict[str, Any]:
         "analyze_when_us_closed": _env_bool("BUBO_ANALYZE_WHEN_US_CLOSED", False),
         "capital": _coerce_float(os.getenv("BUBO_CAPITAL", "10000"), 10000.0, minimum=1.0),
         "allow_short": _env_bool("BUBO_ALLOW_SHORT", False),
+        "atr_stop_enabled": _env_bool("BUBO_ATR_STOP_ENABLED", True),
+        "atr_stop_multiplier": _coerce_float(os.getenv("BUBO_ATR_STOP_MULTIPLIER", "0.85"), 0.85, minimum=0.0),
+        "max_stop_loss_pct": _coerce_float(os.getenv("BUBO_MAX_STOP_LOSS_PCT", "0.08"), 0.08, minimum=0.001),
+        "take_profit_r_multiple": _coerce_float(os.getenv("BUBO_TAKE_PROFIT_R_MULTIPLE", "2.0"), 2.0, minimum=0.0),
+        "max_risk_per_trade_pct": _coerce_float(os.getenv("BUBO_MAX_RISK_PER_TRADE_PCT", "0.005"), 0.005, minimum=0.0),
+        "risky_entry_cap_pct": _coerce_float(os.getenv("BUBO_RISKY_ENTRY_CAP_PCT", "0.10"), 0.10, minimum=0.0),
+        "max_entry_atr_pct": _coerce_float(os.getenv("BUBO_MAX_ENTRY_ATR_PCT", "0.06"), 0.06, minimum=0.0),
+        "max_entry_rsi": _coerce_float(os.getenv("BUBO_MAX_ENTRY_RSI", "72"), 72.0, minimum=1.0),
+        "min_entry_volume_ratio": _coerce_float(os.getenv("BUBO_MIN_ENTRY_VOLUME_RATIO", "0.70"), 0.70, minimum=0.0),
+        "max_entry_1d_ret_pct": _coerce_float(os.getenv("BUBO_MAX_ENTRY_1D_RET_PCT", "0.08"), 0.08, minimum=0.0),
+        "max_entry_5d_ret_pct": _coerce_float(os.getenv("BUBO_MAX_ENTRY_5D_RET_PCT", "0.18"), 0.18, minimum=0.0),
+        "extended_entry_volume_ratio": _coerce_float(os.getenv("BUBO_EXTENDED_ENTRY_VOLUME_RATIO", "1.20"), 1.20, minimum=0.0),
+        "macd_bearish_min_score": _coerce_float(os.getenv("BUBO_MACD_BEARISH_MIN_SCORE", "90"), 90.0, minimum=0.0),
+        "macd_bearish_min_confidence": _coerce_float(os.getenv("BUBO_MACD_BEARISH_MIN_CONFIDENCE", "85"), 85.0, minimum=0.0),
+        "market_open_entry_delay_min": _coerce_int(os.getenv("BUBO_MARKET_OPEN_ENTRY_DELAY_MIN", "45"), 45, minimum=0),
         "paper_enabled": _env_bool("BUBO_PAPER_ENABLED", True),
         "paper_state": os.getenv("BUBO_PAPER_STATE", "data/paper_portfolio_state.json"),
         "paper_webhook": os.getenv("BUBO_PAPER_WEBHOOK", ""),
@@ -2210,6 +2225,83 @@ def _sanitize_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     )
     cfg["capital"] = _coerce_float(payload.get("capital", cfg["capital"]), cfg["capital"], minimum=1.0)
     cfg["allow_short"] = _coerce_bool(payload.get("allow_short"), cfg["allow_short"])
+    cfg["atr_stop_enabled"] = _coerce_bool(payload.get("atr_stop_enabled"), cfg["atr_stop_enabled"])
+    cfg["atr_stop_multiplier"] = _coerce_float(
+        payload.get("atr_stop_multiplier", cfg["atr_stop_multiplier"]),
+        cfg["atr_stop_multiplier"],
+        minimum=0.0,
+    )
+    cfg["max_stop_loss_pct"] = _coerce_float(
+        payload.get("max_stop_loss_pct", cfg["max_stop_loss_pct"]),
+        cfg["max_stop_loss_pct"],
+        minimum=0.001,
+    )
+    cfg["take_profit_r_multiple"] = _coerce_float(
+        payload.get("take_profit_r_multiple", cfg["take_profit_r_multiple"]),
+        cfg["take_profit_r_multiple"],
+        minimum=0.0,
+    )
+    cfg["max_risk_per_trade_pct"] = _coerce_float(
+        payload.get("max_risk_per_trade_pct", cfg["max_risk_per_trade_pct"]),
+        cfg["max_risk_per_trade_pct"],
+        minimum=0.0,
+    )
+    cfg["risky_entry_cap_pct"] = _coerce_float(
+        payload.get("risky_entry_cap_pct", cfg["risky_entry_cap_pct"]),
+        cfg["risky_entry_cap_pct"],
+        minimum=0.0,
+    )
+    cfg["max_entry_atr_pct"] = _coerce_float(
+        payload.get("max_entry_atr_pct", cfg["max_entry_atr_pct"]),
+        cfg["max_entry_atr_pct"],
+        minimum=0.0,
+    )
+    cfg["max_entry_rsi"] = _coerce_float(
+        payload.get("max_entry_rsi", cfg["max_entry_rsi"]),
+        cfg["max_entry_rsi"],
+        minimum=1.0,
+    )
+    cfg["min_entry_volume_ratio"] = _coerce_float(
+        payload.get("min_entry_volume_ratio", cfg["min_entry_volume_ratio"]),
+        cfg["min_entry_volume_ratio"],
+        minimum=0.0,
+    )
+    cfg["max_entry_1d_ret_pct"] = _coerce_float(
+        payload.get("max_entry_1d_ret_pct", cfg["max_entry_1d_ret_pct"]),
+        cfg["max_entry_1d_ret_pct"],
+        minimum=0.0,
+    )
+    cfg["max_entry_5d_ret_pct"] = _coerce_float(
+        payload.get("max_entry_5d_ret_pct", cfg["max_entry_5d_ret_pct"]),
+        cfg["max_entry_5d_ret_pct"],
+        minimum=0.0,
+    )
+    cfg["extended_entry_volume_ratio"] = _coerce_float(
+        payload.get("extended_entry_volume_ratio", cfg["extended_entry_volume_ratio"]),
+        cfg["extended_entry_volume_ratio"],
+        minimum=0.0,
+    )
+    cfg["macd_bearish_min_score"] = min(
+        100.0,
+        _coerce_float(
+            payload.get("macd_bearish_min_score", cfg["macd_bearish_min_score"]),
+            cfg["macd_bearish_min_score"],
+            minimum=0.0,
+        ),
+    )
+    cfg["macd_bearish_min_confidence"] = min(
+        100.0,
+        _coerce_float(
+            payload.get("macd_bearish_min_confidence", cfg["macd_bearish_min_confidence"]),
+            cfg["macd_bearish_min_confidence"],
+            minimum=0.0,
+        ),
+    )
+    cfg["market_open_entry_delay_min"] = _coerce_int(
+        payload.get("market_open_entry_delay_min", cfg["market_open_entry_delay_min"]),
+        cfg["market_open_entry_delay_min"],
+        minimum=0,
+    )
     cfg["ibkr_port"] = _coerce_int(payload.get("ibkr_port", cfg["ibkr_port"]), cfg["ibkr_port"], minimum=1)
     cfg["ibkr_client_id"] = _coerce_int(payload.get("ibkr_client_id", cfg["ibkr_client_id"]), cfg["ibkr_client_id"], minimum=1)
     cfg["ibkr_capital_limit"] = _coerce_float(
@@ -2309,6 +2401,24 @@ def build_engine_command(mode: str, overrides: dict[str, Any] | None = None) -> 
         cmd.append("--allow-short")
     else:
         cmd.append("--no-allow-short")
+    if cfg["atr_stop_enabled"]:
+        cmd.append("--atr-stop-enabled")
+    else:
+        cmd.append("--no-atr-stop-enabled")
+    cmd.extend(["--atr-stop-multiplier", str(cfg["atr_stop_multiplier"])])
+    cmd.extend(["--max-stop-loss-pct", str(cfg["max_stop_loss_pct"])])
+    cmd.extend(["--take-profit-r-multiple", str(cfg["take_profit_r_multiple"])])
+    cmd.extend(["--max-risk-per-trade-pct", str(cfg["max_risk_per_trade_pct"])])
+    cmd.extend(["--risky-entry-cap-pct", str(cfg["risky_entry_cap_pct"])])
+    cmd.extend(["--max-entry-atr-pct", str(cfg["max_entry_atr_pct"])])
+    cmd.extend(["--max-entry-rsi", str(cfg["max_entry_rsi"])])
+    cmd.extend(["--min-entry-volume-ratio", str(cfg["min_entry_volume_ratio"])])
+    cmd.extend(["--max-entry-1d-ret-pct", str(cfg["max_entry_1d_ret_pct"])])
+    cmd.extend(["--max-entry-5d-ret-pct", str(cfg["max_entry_5d_ret_pct"])])
+    cmd.extend(["--extended-entry-volume-ratio", str(cfg["extended_entry_volume_ratio"])])
+    cmd.extend(["--macd-bearish-min-score", str(cfg["macd_bearish_min_score"])])
+    cmd.extend(["--macd-bearish-min-confidence", str(cfg["macd_bearish_min_confidence"])])
+    cmd.extend(["--market-open-entry-delay-min", str(cfg["market_open_entry_delay_min"])])
 
     if cfg["paper_enabled"]:
         cmd.append("--paper")

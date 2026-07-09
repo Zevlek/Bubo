@@ -136,6 +136,53 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["positions"], 0)
             self.assertTrue(any("stop_loss" in a for a in summary["actions"]))
 
+    def test_atr_stop_keeps_position_on_normal_volatility_noise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+
+            buy_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 82.0,
+                    "confidence": 82.0,
+                    "atr_pct": 5.0,
+                    "rsi": 60.0,
+                    "volume_ratio": 1.5,
+                }
+            }
+            self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
+
+            summary = self._run_cycle({}, {"AAA": 97.0}, state_path)
+            self.assertEqual(summary["positions"], 1)
+            self.assertFalse(any("stop_loss" in a for a in summary["actions"]))
+            persisted = load_paper_state(str(state_path), self.cfg)
+            self.assertAlmostEqual(persisted["positions"]["AAA"]["stop_loss_pct"], 0.0425, places=4)
+
+    def test_entry_risk_gate_blocks_direct_paper_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+
+            buy_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 85.0,
+                    "confidence": 80.0,
+                    "atr_pct": 7.0,
+                    "rsi": 74.0,
+                    "volume_ratio": 0.5,
+                    "warnings": ["LLM risk: Volume faible"],
+                }
+            }
+            summary = self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
+
+            self.assertEqual(summary["positions"], 0)
+            self.assertEqual(summary["actions"], [])
+            self.assertEqual(summary["no_trade_reasons"].get("entry risk gate"), 1)
+
     def test_stop_loss_cooldown_blocks_same_cycle_reentry(self):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "paper_state.json"
@@ -335,6 +382,58 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary["actions"], [])
             self.assertTrue(any("IBKR unavailable" in w for w in summary.get("warnings", [])))
             self.assertEqual(summary["no_trade_reasons"].get("ibkr unavailable"), 1)
+
+    def test_ibkr_entry_delay_blocks_first_market_minutes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "paper_state.json"
+            self.cfg.paper_broker = "ibkr"
+            self.cfg.ibkr_existing_positions_policy = "ignore"
+            self.cfg.market_open_entry_delay_min = 45
+            buy_signal = {
+                "AAA": {
+                    "ticker": "AAA",
+                    "decision": "BUY",
+                    "position_size_pct": 0.10,
+                    "final_score": 82.0,
+                    "confidence": 82.0,
+                }
+            }
+
+            class _FakeIBKR:
+                def __init__(self, _cfg):
+                    pass
+
+                def connect(self):
+                    return None
+
+                def place_market_order(self, *_args, **_kwargs):
+                    raise AssertionError("order should be blocked before placement")
+
+                def disconnect(self):
+                    return None
+
+            original_adapter = bubo_engine.IBKRPaperAdapter
+            original_market_clock = bubo_engine.get_us_market_clock
+            try:
+                bubo_engine.IBKRPaperAdapter = _FakeIBKR
+                bubo_engine.get_us_market_clock = lambda: {
+                    "is_open": True,
+                    "seconds_since_open": 20 * 60,
+                    "seconds_to_close": 5 * 3600,
+                }
+                summary = self._run_cycle(buy_signal, {"AAA": 100.0}, state_path)
+            finally:
+                bubo_engine.IBKRPaperAdapter = original_adapter
+                bubo_engine.get_us_market_clock = original_market_clock
+                self.cfg.paper_broker = "local"
+                self.cfg.ibkr_existing_positions_policy = "include"
+                self.cfg.market_open_entry_delay_min = 45
+
+            self.assertEqual(summary["positions"], 0)
+            self.assertEqual(summary["actions"], [])
+            self.assertTrue(
+                any(reason.startswith("entry gate: open delay active") for reason in summary["no_trade_reasons"])
+            )
 
     def test_ibkr_sync_preserves_bubo_entry_price_for_open_position(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -635,8 +734,8 @@ class PaperTradingTests(unittest.TestCase):
             self.assertEqual(summary_dynamic["capital_growth_mode"], "dynamic")
             self.assertAlmostEqual(summary_fixed["managed_capital"], 10_000.0)
             self.assertAlmostEqual(summary_dynamic["managed_capital"], 10_000.0)
-            self.assertEqual(int(persisted_fixed["positions"]["BBB"]["shares"]), 46)
-            self.assertEqual(int(persisted_dynamic["positions"]["BBB"]["shares"]), 50)
+            self.assertEqual(int(persisted_fixed["positions"]["BBB"]["shares"]), 25)
+            self.assertEqual(int(persisted_dynamic["positions"]["BBB"]["shares"]), 26)
 
     def test_dynamic_universe_cache_reused_on_fd_pressure(self):
         with tempfile.TemporaryDirectory() as tmp:
